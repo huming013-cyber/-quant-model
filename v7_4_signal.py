@@ -11,15 +11,16 @@ DATA_DIR = "data"
 INITIAL_CAPITAL = 100000
 TRANCHE_AMOUNT = 20000
 
-# 当前模型核心参数
+# 当前主策略
 MAIN_CODE = "159581"
 MAIN_NAME = "红利ETF"
 
-# V7.3样本外验证中最常出现的参数
+# V7.3样本外验证得到的主要加仓参数
 ADD_STEP = 0.03
 
+
 # ============================================================
-# 读取ETF数据
+# 读取本地ETF数据
 # ============================================================
 
 def load_etf(code):
@@ -30,6 +31,8 @@ def load_etf(code):
         DATA_DIR,
         filename
     )
+
+    print(f"读取本地数据：{path}")
 
     if not os.path.exists(path):
 
@@ -43,17 +46,15 @@ def load_etf(code):
 
         if df.empty:
 
-            print(f"❌ 数据为空：{path}")
+            print("❌ 数据为空")
 
             return None
 
-        # 日期
         df["date"] = pd.to_datetime(
             df["date"],
             errors="coerce"
         )
 
-        # 价格
         df["price"] = pd.to_numeric(
             df["price"],
             errors="coerce"
@@ -83,24 +84,28 @@ def load_etf(code):
 
             return None
 
+        print(
+            f"成功读取 {len(df)} 条数据"
+        )
+
+        print(
+            f"最新日期："
+            f"{df['date'].iloc[-1].strftime('%Y-%m-%d')}"
+        )
+
         return df
 
     except Exception as e:
 
         print(
-            f"❌ 读取失败：{e}"
+            f"❌ 读取数据失败：{e}"
         )
 
         return None
 
 
 # ============================================================
-# 计算趋势
-#
-# 这里只作为风险过滤器。
-#
-# 不参与V7.3历史参数选择，
-# 避免破坏原来的样本外验证逻辑。
+# 趋势计算
 # ============================================================
 
 def calculate_trend(df):
@@ -118,6 +123,7 @@ def calculate_trend(df):
     current = price.iloc[-1]
 
     latest_ma20 = ma20.iloc[-1]
+
     latest_ma60 = ma60.iloc[-1]
 
     if pd.isna(latest_ma20):
@@ -155,33 +161,26 @@ def calculate_trend(df):
             trend = "震荡"
 
     return {
+
         "current": current,
+
         "ma20": latest_ma20,
+
         "ma60": latest_ma60,
+
         "trend": trend
+
     }
 
 
 # ============================================================
-# 计算加仓价格
+# 计算5档价格
 #
-# 注意：
-# 这里采用“首次建仓价格”为基准。
-#
-# 第1档：
-# 首次建仓
-#
-# 第2档：
-# 首次建仓价 × 97%
-#
-# 第3档：
-# 首次建仓价 × 94%
-#
-# 第4档：
-# 首次建仓价 × 91%
-#
-# 第5档：
-# 首次建仓价 × 88%
+# 第1档 = 首次建仓价格
+# 第2档 = 首次价格 × 97%
+# 第3档 = 首次价格 × 94%
+# 第4档 = 首次价格 × 91%
+# 第5档 = 首次价格 × 88%
 # ============================================================
 
 def calculate_levels(first_price):
@@ -204,7 +203,32 @@ def calculate_levels(first_price):
 
 
 # ============================================================
-# 计算当前应该处于哪一档
+# 生成首次建仓后的价格计划
+# ============================================================
+
+def build_price_plan(first_price):
+
+    levels = calculate_levels(
+        first_price
+    )
+
+    return {
+
+        "level1": levels[0],
+
+        "level2": levels[1],
+
+        "level3": levels[2],
+
+        "level4": levels[3],
+
+        "level5": levels[4]
+
+    }
+
+
+# ============================================================
+# 判断当前档位
 # ============================================================
 
 def determine_stage(
@@ -228,7 +252,7 @@ def determine_stage(
 
 
 # ============================================================
-# 生成信号
+# 生成交易信号
 # ============================================================
 
 def generate_signal(
@@ -241,43 +265,107 @@ def generate_signal(
         df
     )
 
-    current_price = (
-        trend["current"]
-    )
+    current_price = trend[
+        "current"
+    ]
 
-    # --------------------------------------------------------
-    # 尚未建仓
-    # --------------------------------------------------------
+    # ========================================================
+    # 情况一：完全没有建仓
+    # ========================================================
 
     if invested_amount <= 0:
 
-        # 如果趋势强或者震荡
         if trend["trend"] in [
             "强势",
             "震荡"
         ]:
 
-            action = "首次建仓"
+            return {
 
-            amount = TRANCHE_AMOUNT
+                "status":
+                    "🟢 可以建仓",
 
-            status = "🟢 可以建仓"
+                "action":
+                    "首次建仓",
+
+                "amount":
+                    TRANCHE_AMOUNT,
+
+                "current_price":
+                    current_price,
+
+                "trend":
+                    trend["trend"],
+
+                "ma20":
+                    trend["ma20"],
+
+                "ma60":
+                    trend["ma60"],
+
+                "stage":
+                    0,
+
+                "next_price":
+                    None,
+
+                "price_plan":
+                    None
+
+            }
 
         else:
 
-            action = "等待"
+            return {
 
-            amount = 0
+                "status":
+                    "🟡 暂缓建仓",
 
-            status = "🟡 趋势偏弱，暂缓建仓"
+                "action":
+                    "等待",
+
+                "amount":
+                    0,
+
+                "current_price":
+                    current_price,
+
+                "trend":
+                    trend["trend"],
+
+                "ma20":
+                    trend["ma20"],
+
+                "ma60":
+                    trend["ma60"],
+
+                "stage":
+                    0,
+
+                "next_price":
+                    None,
+
+                "price_plan":
+                    None
+
+            }
+
+    # ========================================================
+    # 情况二：已经建仓
+    # ========================================================
+
+    if first_price <= 0:
 
         return {
 
-            "status": status,
+            "status":
+                "⚠️ 缺少首次建仓价格",
 
-            "action": action,
+            "action":
+                "无法计算加仓",
 
-            "amount": amount,
+            "amount":
+                0,
 
             "current_price":
                 current_price,
@@ -291,25 +379,26 @@ def generate_signal(
             "ma60":
                 trend["ma60"],
 
-            "stage": 0,
+            "stage":
+                0,
 
             "next_price":
-                current_price
+                None,
+
+            "price_plan":
+                None
 
         }
 
-    # --------------------------------------------------------
-    # 已经建仓
-    # --------------------------------------------------------
+    # ========================================================
+    # 计算价格档位
+    # ========================================================
 
-    stage, levels = (
-        determine_stage(
-            current_price,
-            first_price
-        )
+    stage, levels = determine_stage(
+        current_price,
+        first_price
     )
 
-    # 当前已经投入几档
     current_stage = int(
         round(
             invested_amount
@@ -325,9 +414,9 @@ def generate_signal(
 
         current_stage = 5
 
-    # --------------------------------------------------------
-    # 满仓
-    # --------------------------------------------------------
+    # ========================================================
+    # 已经满仓
+    # ========================================================
 
     if current_stage >= 5:
 
@@ -358,13 +447,16 @@ def generate_signal(
                 5,
 
             "next_price":
-                None
+                None,
+
+            "price_plan":
+                levels
 
         }
 
-    # --------------------------------------------------------
-    # 下一档价格
-    # --------------------------------------------------------
+    # ========================================================
+    # 下一档
+    # ========================================================
 
     next_stage = current_stage + 1
 
@@ -372,14 +464,54 @@ def generate_signal(
         next_stage - 1
     ]
 
-    # --------------------------------------------------------
-    # 是否已经达到下一档价格
-    # --------------------------------------------------------
+    # ========================================================
+    # 已经跌到下一档
+    # ========================================================
 
     if current_price <= next_price:
 
-        # 弱趋势过滤
-        if trend["trend"] == "弱势":
+        # 强趋势 / 震荡：允许加仓
+        if trend["trend"] in [
+            "强势",
+            "震荡"
+        ]:
+
+            return {
+
+                "status":
+                    "🟢 达到加仓条件",
+
+                "action":
+                    "加仓",
+
+                "amount":
+                    TRANCHE_AMOUNT,
+
+                "current_price":
+                    current_price,
+
+                "trend":
+                    trend["trend"],
+
+                "ma20":
+                    trend["ma20"],
+
+                "ma60":
+                    trend["ma60"],
+
+                "stage":
+                    current_stage,
+
+                "next_price":
+                    next_price,
+
+                "price_plan":
+                    levels
+
+            }
+
+        # 弱势：暂停加仓
+        else:
 
             return {
 
@@ -408,44 +540,16 @@ def generate_signal(
                     current_stage,
 
                 "next_price":
-                    next_price
+                    next_price,
+
+                "price_plan":
+                    levels
 
             }
 
-        return {
-
-            "status":
-                "🟢 达到加仓条件",
-
-            "action":
-                "加仓",
-
-            "amount":
-                TRANCHE_AMOUNT,
-
-            "current_price":
-                current_price,
-
-            "trend":
-                trend["trend"],
-
-            "ma20":
-                trend["ma20"],
-
-            "ma60":
-                trend["ma60"],
-
-            "stage":
-                current_stage,
-
-            "next_price":
-                next_price
-
-        }
-
-    # --------------------------------------------------------
+    # ========================================================
     # 尚未达到下一档
-    # --------------------------------------------------------
+    # ========================================================
 
     return {
 
@@ -474,13 +578,67 @@ def generate_signal(
             current_stage,
 
         "next_price":
-            next_price
+            next_price,
+
+        "price_plan":
+            levels
 
     }
 
 
 # ============================================================
-# 打印单只ETF
+# 输出首次建仓计划
+# ============================================================
+
+def print_first_entry_plan(
+    current_price
+):
+
+    levels = calculate_levels(
+        current_price
+    )
+
+    print()
+
+    print(
+        "【首次建仓后的完整价格计划】"
+    )
+
+    print()
+
+    print(
+        f"第1档："
+        f"{levels[0]:.4f}"
+        f" → 20,000元"
+    )
+
+    print(
+        f"第2档："
+        f"{levels[1]:.4f}"
+        f" → 20,000元"
+    )
+
+    print(
+        f"第3档："
+        f"{levels[2]:.4f}"
+        f" → 20,000元"
+    )
+
+    print(
+        f"第4档："
+        f"{levels[3]:.4f}"
+        f" → 20,000元"
+    )
+
+    print(
+        f"第5档："
+        f"{levels[4]:.4f}"
+        f" → 20,000元"
+    )
+
+
+# ============================================================
+# 输出结果
 # ============================================================
 
 def print_result(
@@ -506,19 +664,35 @@ def print_result(
         f"{result['current_price']:.4f}"
     )
 
-    print(
-        f"20日均线："
-        f"{result['ma20']:.4f}"
-        if not pd.isna(result["ma20"])
-        else "20日均线：数据不足"
-    )
+    if not pd.isna(
+        result["ma20"]
+    ):
 
-    print(
-        f"60日均线："
-        f"{result['ma60']:.4f}"
-        if not pd.isna(result["ma60"])
-        else "60日均线：数据不足"
-    )
+        print(
+            f"20日均线："
+            f"{result['ma20']:.4f}"
+        )
+
+    else:
+
+        print(
+            "20日均线：数据不足"
+        )
+
+    if not pd.isna(
+        result["ma60"]
+    ):
+
+        print(
+            f"60日均线："
+            f"{result['ma60']:.4f}"
+        )
+
+    else:
+
+        print(
+            "60日均线：数据不足"
+        )
 
     print(
         f"趋势状态："
@@ -529,7 +703,8 @@ def print_result(
 
     print(
         f"当前投入："
-        f"{invested_amount:,.0f} / "
+        f"{invested_amount:,.0f}"
+        f" / "
         f"{INITIAL_CAPITAL:,.0f} 元"
     )
 
@@ -564,7 +739,44 @@ def print_result(
             f"{result['amount']:,.0f} 元"
         )
 
+    # ========================================================
+    # 尚未建仓
+    # ========================================================
+
+    if (
+        invested_amount <= 0
+        and result["action"] == "首次建仓"
+    ):
+
+        print()
+
+        print_first_entry_plan(
+            result["current_price"]
+        )
+
+        print()
+
+        print(
+            "⚠️ 上述第1档价格只是当前参考价。"
+        )
+
+        print(
+            "实际首次成交价格确定后，"
+        )
+
+        print(
+            "后续4档价格应以实际成交价重新计算。"
+        )
+
+        return
+
+    # ========================================================
+    # 已建仓
+    # ========================================================
+
     if result["next_price"] is not None:
+
+        print()
 
         print(
             f"下一档触发价格："
@@ -581,6 +793,28 @@ def print_result(
             f"距离下一档："
             f"{distance:.2f}%"
         )
+
+    # ========================================================
+    # 输出完整价格计划
+    # ========================================================
+
+    if result["price_plan"] is not None:
+
+        print()
+
+        print(
+            "【当前价格计划】"
+        )
+
+        for i, price in enumerate(
+            result["price_plan"],
+            start=1
+        ):
+
+            print(
+                f"第{i}档："
+                f"{price:.4f}"
+            )
 
 
 # ============================================================
@@ -602,7 +836,7 @@ def main():
     print()
 
     print(
-        "核心策略：159581 红利ETF"
+        "主策略：159581 红利ETF"
     )
 
     print(
@@ -620,25 +854,29 @@ def main():
     print()
 
     # ========================================================
-    # 注意
+    # 当前真实账户状态
     #
-    # 第一次运行时：
+    # 第一次运行：
     #
     # invested_amount = 0
     # first_price = 0
     #
-    # 如果以后已经实际买入：
+    # 当你实际买入以后：
     #
-    # 修改下面两个数字。
+    # invested_amount
+    # 改成实际投入金额
+    #
+    # first_price
+    # 改成第一次实际成交价格
+    #
     # ========================================================
 
     invested_amount = 0
 
     first_price = 0
 
-
     # ========================================================
-    # 读取159581
+    # 主ETF
     # ========================================================
 
     df = load_etf(
@@ -655,19 +893,11 @@ def main():
 
         return
 
-    # ========================================================
-    # 生成信号
-    # ========================================================
-
     result = generate_signal(
         df,
         invested_amount,
         first_price
     )
-
-    # ========================================================
-    # 输出
-    # ========================================================
 
     print_result(
         MAIN_CODE,
@@ -678,7 +908,7 @@ def main():
     )
 
     # ========================================================
-    # 其他ETF只作为观察
+    # 其他ETF观察
     # ========================================================
 
     print()
@@ -692,8 +922,17 @@ def main():
     print("=" * 60)
 
     for code, name in [
-        ("159209", "红利质量ETF"),
-        ("159399", "现金流ETF")
+
+        (
+            "159209",
+            "红利质量ETF"
+        ),
+
+        (
+            "159399",
+            "现金流ETF"
+        )
+
     ]:
 
         other_df = load_etf(
@@ -728,10 +967,6 @@ def main():
             "当前V7.3评级：暂缓"
         )
 
-    # ========================================================
-    # 完成
-    # ========================================================
-
     print()
 
     print("=" * 60)
@@ -742,6 +977,10 @@ def main():
 
     print("=" * 60)
 
+
+# ============================================================
+# 程序入口
+# ============================================================
 
 if __name__ == "__main__":
 
