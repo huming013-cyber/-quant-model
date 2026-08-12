@@ -2,8 +2,6 @@ name: Quant Update
 
 on:
   workflow_dispatch:
-  schedule:
-    - cron: "30 8 * * 1-5"
 
 permissions:
   contents: write
@@ -13,28 +11,82 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
 
+      # =====================================================
+      # 1. 获取 GitHub 仓库代码
+      # =====================================================
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # =====================================================
+      # 2. 安装 Python
+      # =====================================================
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
 
+      # =====================================================
+      # 3. 安装依赖
+      # =====================================================
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
+      # =====================================================
+      # 4. 更新量化数据
+      # =====================================================
       - name: Run quant model
         run: |
           python update_data.py
+
+      # =====================================================
+      # 5. 运行历史回测
+      # =====================================================
+      - name: Run backtest
+        run: |
           python backtest.py
 
-          - name: Save results
-            run: |
-               git config user.name "github-actions[bot]"
-               git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-               git add data/
-               git diff --cached --quiet || git commit -m "Update quant results"
-               git push
+      # =====================================================
+      # 6. 检查结果文件
+      # =====================================================
+      - name: Check result files
+        run: |
+          echo "========== data directory =========="
+          ls -lah data/
+
+          echo "========== quant result =========="
+          if [ -f data/quant_result.csv ]; then
+            echo "quant_result.csv OK"
+          else
+            echo "ERROR: quant_result.csv not found"
+            exit 1
+          fi
+
+          echo "========== backtest result =========="
+          if [ -f data/backtest_result.csv ]; then
+            echo "backtest_result.csv OK"
+          else
+            echo "ERROR: backtest_result.csv not found"
+            exit 1
+          fi
+
+      # =====================================================
+      # 7. 保存结果到 GitHub
+      # =====================================================
+      - name: Save results
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git add data/
+
+          if git diff --cached --quiet; then
+            echo "No changes to commit"
+          else
+            git commit -m "Update quant results and backtest"
+            git push
+          fi
