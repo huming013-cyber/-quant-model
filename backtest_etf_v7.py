@@ -2,25 +2,26 @@ import os
 import warnings
 import numpy as np
 import pandas as pd
-import yfinance as yf
 
 warnings.filterwarnings("ignore")
 
 # ============================================================
-# ETF V7：滚动历史验证模型
+# ETF V7.1
+#
+# 重要：
+# V7.1 不再访问 Yahoo Finance
+#
+# 直接读取 update_data.py 已经生成的：
+#
+# data/etf_159209-signals.csv
+# data/etf_159399-signals.csv
+# data/etf_159581-signals.csv
 #
 # 目的：
-# 防止 V6 出现“历史参数过拟合”。
+# 验证 V6 找出的分批加仓参数是否具有样本外稳定性。
 #
-# 方法：
-# 训练期：
-#   测试 2/3/4/5/6/8/10% 加仓间距
-#
-# 验证期：
-#   使用训练期选出的最佳参数
-#   不重新优化
-#
-# 最后统计真正的样本外表现。
+# 测试参数：
+# 2%、3%、4%、5%、6%、8%、10%
 #
 # 总资金：100000
 # 每档：20000
@@ -46,64 +47,208 @@ ETF_LIST = [
     {
         "code": "159209",
         "name": "红利质量ETF",
-        "yahoo": "159209.SZ"
+        "file": "etf_159209-signals.csv"
     },
     {
         "code": "159399",
         "name": "现金流ETF",
-        "yahoo": "159399.SZ"
+        "file": "etf_159399-signals.csv"
     },
     {
         "code": "159581",
         "name": "红利ETF",
-        "yahoo": "159581.SZ"
+        "file": "etf_159581-signals.csv"
     }
 ]
 
-os.makedirs(DATA_DIR, exist_ok=True)
-
 
 # ============================================================
-# 获取数据
+# 读取本地数据
 # ============================================================
 
-def download_data(symbol):
+def load_local_data(filename):
 
-    print(f"获取数据：{symbol}")
+    path = os.path.join(
+        DATA_DIR,
+        filename
+    )
+
+    print(
+        f"读取本地数据：{path}"
+    )
+
+    if not os.path.exists(path):
+
+        print(
+            f"文件不存在：{path}"
+        )
+
+        return None
 
     try:
 
-        df = yf.download(
-            symbol,
-            period="5y",
-            interval="1d",
-            auto_adjust=False,
-            progress=False,
-            threads=False
+        df = pd.read_csv(
+            path
         )
 
-        if df is None or df.empty:
+        if df.empty:
+
+            print(
+                "CSV为空"
+            )
+
             return None
 
-        if isinstance(df.columns, pd.MultiIndex):
-            df.columns = df.columns.get_level_values(0)
+        print(
+            "原始字段："
+            + str(list(df.columns))
+        )
 
-        if "Close" not in df.columns:
+        # ----------------------------------------------------
+        # 自动寻找日期列
+        # ----------------------------------------------------
+
+        date_candidates = [
+            "date",
+            "Date",
+            "日期",
+            "datetime",
+            "Datetime",
+            "时间"
+        ]
+
+        date_col = None
+
+        for col in date_candidates:
+
+            if col in df.columns:
+
+                date_col = col
+                break
+
+        if date_col is not None:
+
+            df[date_col] = pd.to_datetime(
+                df[date_col],
+                errors="coerce"
+            )
+
+            df = df.dropna(
+                subset=[date_col]
+            )
+
+            df = df.sort_values(
+                date_col
+            )
+
+            df = df.set_index(
+                date_col
+            )
+
+        # ----------------------------------------------------
+        # 自动寻找收盘价
+        # ----------------------------------------------------
+
+        close_candidates = [
+            "close",
+            "Close",
+            "收盘",
+            "收盘价",
+            "price",
+            "Price"
+        ]
+
+        close_col = None
+
+        for col in close_candidates:
+
+            if col in df.columns:
+
+                close_col = col
+                break
+
+        # ----------------------------------------------------
+        # 如果没有标准close字段，
+        # 尝试寻找包含close的字段
+        # ----------------------------------------------------
+
+        if close_col is None:
+
+            for col in df.columns:
+
+                col_lower = str(
+                    col
+                ).lower()
+
+                if (
+                    "close" in col_lower
+                    or "收盘" in str(col)
+                ):
+
+                    close_col = col
+                    break
+
+        if close_col is None:
+
+            print(
+                "找不到收盘价字段"
+            )
+
+            print(
+                "当前字段："
+                + str(list(df.columns))
+            )
+
             return None
+
+        # ----------------------------------------------------
+        # 标准化Close
+        # ----------------------------------------------------
+
+        df["Close"] = pd.to_numeric(
+            df[close_col],
+            errors="coerce"
+        )
 
         df = df.dropna(
             subset=["Close"]
         )
 
-        if len(df) < 500:
-            return None
+        df = df[
+            df["Close"] > 0
+        ]
+
+        # ----------------------------------------------------
+        # 删除重复日期
+        # ----------------------------------------------------
+
+        if df.index.duplicated().any():
+
+            df = df[
+                ~df.index.duplicated(
+                    keep="last"
+                )
+            ]
+
+        print(
+            f"成功读取 {len(df)} 条数据"
+        )
+
+        if len(df) > 0:
+
+            print(
+                f"数据范围："
+                f"{df.index[0]} "
+                f"→ "
+                f"{df.index[-1]}"
+            )
 
         return df
 
     except Exception as e:
 
         print(
-            f"数据获取失败：{e}"
+            f"读取数据失败：{e}"
         )
 
         return None
@@ -132,7 +277,25 @@ def backtest_buy_hold(df):
 
 
 # ============================================================
-# 分批策略
+# 分批建仓
+#
+# 第一次：20,000
+#
+# 之后：
+#
+# 2%：
+# -2%
+# -4%
+# -6%
+# -8%
+#
+# 3%：
+# -3%
+# -6%
+# -9%
+# -12%
+#
+# 以此类推。
 # ============================================================
 
 def backtest_tranche(
@@ -143,12 +306,15 @@ def backtest_tranche(
     close = df["Close"]
 
     cash = INITIAL_CAPITAL
+
     shares = 0.0
 
     first_price = None
+
     tranche_count = 0
 
     equity_curve = []
+
     invested_curve = []
 
     entry_count = 0
@@ -164,14 +330,24 @@ def backtest_tranche(
         if tranche_count == 0:
 
             amount = TRANCHE
-            fee = amount * FEE_RATE
+
+            fee = (
+                amount
+                * FEE_RATE
+            )
 
             if cash >= amount + fee:
 
-                shares += amount / price
-                cash -= amount + fee
+                shares += (
+                    amount / price
+                )
+
+                cash -= (
+                    amount + fee
+                )
 
                 first_price = price
+
                 tranche_count = 1
 
                 entry_count += 1
@@ -186,7 +362,8 @@ def backtest_tranche(
         ):
 
             drawdown = (
-                price / first_price - 1
+                price / first_price
+                - 1
             )
 
             target = (
@@ -197,21 +374,32 @@ def backtest_tranche(
             if drawdown <= target:
 
                 amount = TRANCHE
-                fee = amount * FEE_RATE
+
+                fee = (
+                    amount
+                    * FEE_RATE
+                )
 
                 if cash >= amount + fee:
 
-                    shares += amount / price
-                    cash -= amount + fee
+                    shares += (
+                        amount / price
+                    )
+
+                    cash -= (
+                        amount + fee
+                    )
 
                     tranche_count += 1
+
                     entry_count += 1
 
         equity_value = (
-            cash + shares * price
+            cash
+            + shares * price
         )
 
-        invested = (
+        invested_value = (
             shares * price
         )
 
@@ -220,7 +408,7 @@ def backtest_tranche(
         )
 
         invested_curve.append(
-            invested
+            invested_value
         )
 
     equity = pd.Series(
@@ -228,20 +416,20 @@ def backtest_tranche(
         index=df.index
     )
 
-    invested_series = pd.Series(
+    invested = pd.Series(
         invested_curve,
         index=df.index
     )
 
     return (
         equity,
-        invested_series,
+        invested,
         entry_count
     )
 
 
 # ============================================================
-# 指标
+# 计算指标
 # ============================================================
 
 def calculate_metrics(equity):
@@ -263,9 +451,13 @@ def calculate_metrics(equity):
         - 1
     )
 
-    years = len(equity) / 252
+    years = (
+        len(equity)
+        / 252
+    )
 
     if years <= 0:
+
         years = 1
 
     annual_return = (
@@ -281,7 +473,9 @@ def calculate_metrics(equity):
         - 1
     )
 
-    max_drawdown = drawdown.min()
+    max_drawdown = (
+        drawdown.min()
+    )
 
     daily_return = (
         equity
@@ -320,19 +514,23 @@ def calculate_metrics(equity):
 
 
 # ============================================================
-# 参数评分
-#
-# 与V6保持一致
+# 策略评分
 # ============================================================
 
 def strategy_score(metrics):
 
-    annual = metrics["annual_return"]
+    annual = metrics[
+        "annual_return"
+    ]
 
-    sharpe = metrics["sharpe"]
+    sharpe = metrics[
+        "sharpe"
+    ]
 
     drawdown = abs(
-        metrics["max_drawdown"]
+        metrics[
+            "max_drawdown"
+        ]
     )
 
     score = (
@@ -345,10 +543,12 @@ def strategy_score(metrics):
 
 
 # ============================================================
-# 在训练期寻找最佳参数
+# 训练期选择参数
 # ============================================================
 
-def find_best_parameter(train_df):
+def find_best_parameter(
+    train_df
+):
 
     candidates = []
 
@@ -371,19 +571,28 @@ def find_best_parameter(train_df):
 
         candidates.append({
 
-            "level": level,
+            "level":
+                level,
 
             "return":
-                metrics["total_return"],
+                metrics[
+                    "total_return"
+                ],
 
             "annual":
-                metrics["annual_return"],
+                metrics[
+                    "annual_return"
+                ],
 
             "drawdown":
-                metrics["max_drawdown"],
+                metrics[
+                    "max_drawdown"
+                ],
 
             "sharpe":
-                metrics["sharpe"],
+                metrics[
+                    "sharpe"
+                ],
 
             "score":
                 score,
@@ -401,16 +610,14 @@ def find_best_parameter(train_df):
         ascending=False
     ).iloc[0]
 
-    return best, candidates_df
+    return (
+        best,
+        candidates_df
+    )
 
 
 # ============================================================
-# 关键：
-# 在验证期使用训练期选出的参数
-#
-# 注意：
-# 验证期重新从100000开始，
-# 不允许把训练期结果带进来。
+# 验证期
 # ============================================================
 
 def evaluate_validation(
@@ -440,17 +647,26 @@ def evaluate_validation(
     )
 
     return {
+
         "return":
-            metrics["total_return"],
+            metrics[
+                "total_return"
+            ],
 
         "annual":
-            metrics["annual_return"],
+            metrics[
+                "annual_return"
+            ],
 
         "drawdown":
-            metrics["max_drawdown"],
+            metrics[
+                "max_drawdown"
+            ],
 
         "sharpe":
-            metrics["sharpe"],
+            metrics[
+                "sharpe"
+            ],
 
         "entries":
             entries,
@@ -461,24 +677,21 @@ def evaluate_validation(
 
 
 # ============================================================
-# V7滚动验证
+# Walk Forward
 #
-# 数据分成：
+# 每次：
 #
-# 训练：前60%
-# 验证：后40%
+# 训练252个交易日
+# 验证126个交易日
 #
-# 然后滚动：
+# 然后向前滚动126天。
 #
-# 第1段：
-# 训练 -> 验证
-#
-# 第2段：
-# 更晚的训练 -> 更晚的验证
-#
+# 参数只允许由训练期决定。
 # ============================================================
 
-def walk_forward_validation(df):
+def walk_forward_validation(
+    df
+):
 
     df = df.copy()
 
@@ -489,6 +702,7 @@ def walk_forward_validation(df):
         return None
 
     train_size = 252
+
     validation_size = 126
 
     results = []
@@ -516,7 +730,7 @@ def walk_forward_validation(df):
         ]
 
         # ====================================================
-        # 只用训练数据寻找参数
+        # 训练期选择参数
         # ====================================================
 
         best, candidates = (
@@ -530,7 +744,7 @@ def walk_forward_validation(df):
         )
 
         # ====================================================
-        # 使用锁定参数测试验证数据
+        # 验证期使用锁定参数
         # ====================================================
 
         validation = (
@@ -546,34 +760,60 @@ def walk_forward_validation(df):
                 window_id,
 
             "train_start":
-                str(train_df.index[0].date()),
+                str(
+                    train_df.index[
+                        0
+                    ]
+                ),
 
             "train_end":
-                str(train_df.index[-1].date()),
+                str(
+                    train_df.index[
+                        -1
+                    ]
+                ),
 
             "validation_start":
-                str(validation_df.index[0].date()),
+                str(
+                    validation_df.index[
+                        0
+                    ]
+                ),
 
             "validation_end":
-                str(validation_df.index[-1].date()),
+                str(
+                    validation_df.index[
+                        -1
+                    ]
+                ),
 
             "selected_step":
                 f"{best_level * 100:.0f}%",
 
             "validation_return":
-                validation["return"],
+                validation[
+                    "return"
+                ],
 
             "validation_annual":
-                validation["annual"],
+                validation[
+                    "annual"
+                ],
 
             "validation_drawdown":
-                validation["drawdown"],
+                validation[
+                    "drawdown"
+                ],
 
             "validation_sharpe":
-                validation["sharpe"],
+                validation[
+                    "sharpe"
+                ],
 
             "validation_entries":
-                validation["entries"],
+                validation[
+                    "entries"
+                ],
 
             "capital_utilization":
                 validation[
@@ -593,16 +833,16 @@ def walk_forward_validation(df):
 
         print(
             f"训练期："
-            f"{train_df.index[0].date()}"
+            f"{train_df.index[0]}"
             f" → "
-            f"{train_df.index[-1].date()}"
+            f"{train_df.index[-1]}"
         )
 
         print(
             f"验证期："
-            f"{validation_df.index[0].date()}"
+            f"{validation_df.index[0]}"
             f" → "
-            f"{validation_df.index[-1].date()}"
+            f"{validation_df.index[-1]}"
         )
 
         print(
@@ -636,6 +876,7 @@ def walk_forward_validation(df):
         )
 
         start += validation_size
+
         window_id += 1
 
     return pd.DataFrame(
@@ -652,7 +893,7 @@ def main():
     print("=" * 70)
 
     print(
-        "ETF V7：滚动历史验证模型"
+        "ETF V7.1：本地数据滚动验证模型"
     )
 
     print("=" * 70)
@@ -664,7 +905,10 @@ def main():
     for item in ETF_LIST:
 
         code = item["code"]
+
         name = item["name"]
+
+        filename = item["file"]
 
         print()
 
@@ -676,14 +920,14 @@ def main():
 
         print("=" * 70)
 
-        df = download_data(
-            item["yahoo"]
+        df = load_local_data(
+            filename
         )
 
         if df is None:
 
             print(
-                "数据获取失败"
+                "数据读取失败，跳过"
             )
 
             continue
@@ -700,7 +944,7 @@ def main():
         ):
 
             print(
-                "数据不足，无法进行V7"
+                "数据不足，无法验证"
             )
 
             continue
@@ -768,8 +1012,6 @@ def main():
             / total_windows
             * 100
         )
-
-        # 参数选择次数
 
         parameter_counts = (
             result_df[
@@ -852,7 +1094,7 @@ def main():
         print()
 
         print(
-            "V7汇总："
+            "V7.1汇总："
         )
 
         print(
@@ -947,7 +1189,7 @@ def main():
     print("=" * 70)
 
     print(
-        "V7滚动验证完成"
+        "V7.1滚动验证完成"
     )
 
     print("=" * 70)
