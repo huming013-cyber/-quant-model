@@ -77,7 +77,7 @@ jobs:
 
       - name: Run ETF V7 backtest
         run: |
-          python backtest_etf_v7.py
+          python v7_4_signal.py
 
       # =====================================================
       # 9. 保存所有回测结果
