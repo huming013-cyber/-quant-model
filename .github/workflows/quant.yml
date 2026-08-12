@@ -1,7 +1,8 @@
-name: ETF Quant Update
+name: ETF Quant
 
 on:
   workflow_dispatch:
+
   schedule:
     - cron: "30 8 * * 1-5"
 
@@ -15,17 +16,17 @@ jobs:
     steps:
 
       # =====================================================
-      # 1. 下载代码
+      # 1. 获取代码
       # =====================================================
 
-      - name: Checkout repository
+      - name: Checkout
         uses: actions/checkout@v4
 
       # =====================================================
       # 2. 设置 Python
       # =====================================================
 
-      - name: Set up Python
+      - name: Setup Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
@@ -40,7 +41,7 @@ jobs:
           pip install -r requirements.txt
 
       # =====================================================
-      # 4. 更新ETF数据
+      # 4. 更新 ETF 数据
       # =====================================================
 
       - name: Update ETF data
@@ -48,39 +49,31 @@ jobs:
           python update_data.py
 
       # =====================================================
-      # 5. 原来的V4回测
+      # 5. V7.3 / V7.4 历史回测
       # =====================================================
 
-      - name: Run ETF V4 backtest
+      - name: Run V7 Backtest
         run: |
-          python backtest_etf.py
+          python backtest_etf_v7.py
 
       # =====================================================
-      # 6. V5复杂择时模型
+      # 6. V7.4.1 建仓信号严格样本外验证
       # =====================================================
 
-      - name: Run ETF V5 backtest
+      - name: Run V7.4.1 Entry Validation
         run: |
-          python backtest_etf_v5.py
+          python backtest_etf_v7_4_1.py
 
       # =====================================================
-      # 7. V6分批建仓优化
+      # 7. V7.4 当前实盘执行信号
       # =====================================================
 
-      - name: Run ETF V6 backtest
-        run: |
-          python backtest_etf_v6.py
-
-      # =====================================================
-      # 8. V7滚动历史验证
-      # =====================================================
-
-      - name: Run ETF V7 backtest
+      - name: Run V7.4 Signal
         run: |
           python v7_4_signal.py
 
       # =====================================================
-      # 9. 保存所有回测结果
+      # 8. 保存更新后的数据和结果
       # =====================================================
 
       - name: Commit results
@@ -88,8 +81,8 @@ jobs:
           git config --global user.name "github-actions[bot]"
           git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
-          git add .
+          git add data
 
-          git diff --cached --quiet || git commit -m "Update ETF quantitative results"
+          git diff --cached --quiet || git commit -m "Update ETF quant results"
 
           git push
