@@ -5,33 +5,37 @@ import pandas as pd
 
 warnings.filterwarnings("ignore")
 
+
 # ============================================================
-# ETF V7.1
+# ETF V7.2
+# 上市以来完整回测 + 样本外滚动验证
+#
+# 数据来源：
+# data/etf_159209_signals.csv
+# data/etf_159399_signals.csv
+# data/etf_159581_signals.csv
 #
 # 重要：
-# V7.1 不再访问 Yahoo Finance
-#
-# 直接读取 update_data.py 已经生成的：
-#
-# data/etf_159209-signals.csv
-# data/etf_159399-signals.csv
-# data/etf_159581-signals.csv
-#
-# 目的：
-# 验证 V6 找出的分批加仓参数是否具有样本外稳定性。
-#
-# 测试参数：
-# 2%、3%、4%、5%、6%、8%、10%
-#
-# 总资金：100000
-# 每档：20000
+# 1. 不人为补充上市以前的数据
+# 2. 每只ETF按照自己的真实历史长度计算
+# 3. 历史不足时自动减少验证窗口
+# 4. 训练期选择参数
+# 5. 验证期锁定参数，不重新优化
 # ============================================================
+
 
 DATA_DIR = "data"
 
 INITIAL_CAPITAL = 100000
+
 TRANCHE = 20000
+
 FEE_RATE = 0.0005
+
+
+# ============================================================
+# 测试的加仓间距
+# ============================================================
 
 DRAWDOWN_LEVELS = [
     0.02,
@@ -43,22 +47,31 @@ DRAWDOWN_LEVELS = [
     0.10
 ]
 
+
+# ============================================================
+# ETF列表
+# ============================================================
+
 ETF_LIST = [
+
     {
         "code": "159209",
         "name": "红利质量ETF",
         "file": "etf_159209_signals.csv"
     },
+
     {
         "code": "159399",
         "name": "现金流ETF",
         "file": "etf_159399_signals.csv"
     },
+
     {
         "code": "159581",
         "name": "红利ETF",
         "file": "etf_159581_signals.csv"
     }
+
 ]
 
 
@@ -66,12 +79,14 @@ ETF_LIST = [
 # 读取本地数据
 # ============================================================
 
-def load_local_data(filename):
+def load_data(filename):
 
     path = os.path.join(
         DATA_DIR,
         filename
     )
+
+    print()
 
     print(
         f"读取本地数据：{path}"
@@ -80,7 +95,7 @@ def load_local_data(filename):
     if not os.path.exists(path):
 
         print(
-            f"文件不存在：{path}"
+            "文件不存在"
         )
 
         return None
@@ -101,112 +116,88 @@ def load_local_data(filename):
 
         print(
             "原始字段："
-            + str(list(df.columns))
+            + str(
+                list(df.columns)
+            )
         )
 
         # ----------------------------------------------------
-        # 自动寻找日期列
+        # 日期
         # ----------------------------------------------------
 
-        date_candidates = [
+        date_col = None
+
+        for col in [
             "date",
             "Date",
             "日期",
             "datetime",
             "Datetime",
             "时间"
-        ]
-
-        date_col = None
-
-        for col in date_candidates:
+        ]:
 
             if col in df.columns:
 
                 date_col = col
+
                 break
 
-        if date_col is not None:
-
-            df[date_col] = pd.to_datetime(
-                df[date_col],
-                errors="coerce"
-            )
-
-            df = df.dropna(
-                subset=[date_col]
-            )
-
-            df = df.sort_values(
-                date_col
-            )
-
-            df = df.set_index(
-                date_col
-            )
-
-        # ----------------------------------------------------
-        # 自动寻找收盘价
-        # ----------------------------------------------------
-
-        close_candidates = [
-            "close",
-            "Close",
-            "收盘",
-            "收盘价",
-            "price",
-            "Price"
-        ]
-
-        close_col = None
-
-        for col in close_candidates:
-
-            if col in df.columns:
-
-                close_col = col
-                break
-
-        # ----------------------------------------------------
-        # 如果没有标准close字段，
-        # 尝试寻找包含close的字段
-        # ----------------------------------------------------
-
-        if close_col is None:
-
-            for col in df.columns:
-
-                col_lower = str(
-                    col
-                ).lower()
-
-                if (
-                    "close" in col_lower
-                    or "收盘" in str(col)
-                ):
-
-                    close_col = col
-                    break
-
-        if close_col is None:
+        if date_col is None:
 
             print(
-                "找不到收盘价字段"
-            )
-
-            print(
-                "当前字段："
-                + str(list(df.columns))
+                "找不到日期字段"
             )
 
             return None
 
+        df[date_col] = pd.to_datetime(
+            df[date_col],
+            errors="coerce"
+        )
+
+        df = df.dropna(
+            subset=[date_col]
+        )
+
+        df = df.sort_values(
+            date_col
+        )
+
+        df = df.set_index(
+            date_col
+        )
+
         # ----------------------------------------------------
-        # 标准化Close
+        # 价格
         # ----------------------------------------------------
 
+        price_col = None
+
+        for col in [
+            "price",
+            "Price",
+            "close",
+            "Close",
+            "收盘",
+            "收盘价"
+        ]:
+
+            if col in df.columns:
+
+                price_col = col
+
+                break
+
+        if price_col is None:
+
+            print(
+                "找不到价格字段"
+            )
+
+            return None
+
         df["Close"] = pd.to_numeric(
-            df[close_col],
+            df[price_col],
             errors="coerce"
         )
 
@@ -219,36 +210,32 @@ def load_local_data(filename):
         ]
 
         # ----------------------------------------------------
-        # 删除重复日期
+        # 去重
         # ----------------------------------------------------
 
-        if df.index.duplicated().any():
-
-            df = df[
-                ~df.index.duplicated(
-                    keep="last"
-                )
-            ]
+        df = df[
+            ~df.index.duplicated(
+                keep="last"
+            )
+        ]
 
         print(
             f"成功读取 {len(df)} 条数据"
         )
 
-        if len(df) > 0:
-
-            print(
-                f"数据范围："
-                f"{df.index[0]} "
-                f"→ "
-                f"{df.index[-1]}"
-            )
+        print(
+            f"数据范围："
+            f"{df.index[0].date()}"
+            f" → "
+            f"{df.index[-1].date()}"
+        )
 
         return df
 
     except Exception as e:
 
         print(
-            f"读取数据失败：{e}"
+            f"数据读取失败：{e}"
         )
 
         return None
@@ -258,19 +245,16 @@ def load_local_data(filename):
 # 买入持有
 # ============================================================
 
-def backtest_buy_hold(df):
+def buy_hold(df):
 
-    close = df["Close"]
+    prices = df["Close"]
 
-    daily_return = (
-        close
-        .pct_change()
-        .fillna(0)
-    )
+    start_price = prices.iloc[0]
 
     equity = (
         INITIAL_CAPITAL
-        * (1 + daily_return).cumprod()
+        * prices
+        / start_price
     )
 
     return equity
@@ -279,55 +263,43 @@ def backtest_buy_hold(df):
 # ============================================================
 # 分批建仓
 #
-# 第一次：20,000
+# 总资金100000
 #
-# 之后：
+# 20000第一笔
 #
-# 2%：
-# -2%
-# -4%
-# -6%
-# -8%
+# 后面每跌一个指定百分比加20000
 #
-# 3%：
-# -3%
-# -6%
-# -9%
-# -12%
-#
-# 以此类推。
+# 最多5笔
 # ============================================================
 
-def backtest_tranche(
+def tranche_strategy(
     df,
-    drawdown_step
+    step
 ):
 
-    close = df["Close"]
+    prices = df["Close"]
 
     cash = INITIAL_CAPITAL
 
-    shares = 0.0
+    shares = 0
 
     first_price = None
 
-    tranche_count = 0
+    entries = 0
 
-    equity_curve = []
+    equity_list = []
 
-    invested_curve = []
+    invested_list = []
 
-    entry_count = 0
-
-    for price in close:
+    for price in prices:
 
         price = float(price)
 
-        # ====================================================
-        # 第一档
-        # ====================================================
+        # ----------------------------------------------------
+        # 第一笔
+        # ----------------------------------------------------
 
-        if tranche_count == 0:
+        if entries == 0:
 
             amount = TRANCHE
 
@@ -339,36 +311,34 @@ def backtest_tranche(
             if cash >= amount + fee:
 
                 shares += (
-                    amount / price
+                    amount
+                    / price
                 )
 
                 cash -= (
-                    amount + fee
+                    amount
+                    + fee
                 )
 
                 first_price = price
 
-                tranche_count = 1
+                entries = 1
 
-                entry_count += 1
-
-        # ====================================================
+        # ----------------------------------------------------
         # 后续加仓
-        # ====================================================
+        # ----------------------------------------------------
 
-        elif (
-            tranche_count < 5
-            and first_price is not None
-        ):
+        elif entries < 5:
 
             drawdown = (
-                price / first_price
+                price
+                / first_price
                 - 1
             )
 
             target = (
-                -drawdown_step
-                * tranche_count
+                -step
+                * entries
             )
 
             if drawdown <= target:
@@ -383,78 +353,81 @@ def backtest_tranche(
                 if cash >= amount + fee:
 
                     shares += (
-                        amount / price
+                        amount
+                        / price
                     )
 
                     cash -= (
-                        amount + fee
+                        amount
+                        + fee
                     )
 
-                    tranche_count += 1
+                    entries += 1
 
-                    entry_count += 1
+        # ----------------------------------------------------
+        # 每日资产
+        # ----------------------------------------------------
 
-        equity_value = (
+        equity = (
             cash
             + shares * price
         )
 
-        invested_value = (
+        invested = (
             shares * price
         )
 
-        equity_curve.append(
-            equity_value
+        equity_list.append(
+            equity
         )
 
-        invested_curve.append(
-            invested_value
+        invested_list.append(
+            invested
         )
 
     equity = pd.Series(
-        equity_curve,
-        index=df.index
+        equity_list,
+        index=prices.index
     )
 
     invested = pd.Series(
-        invested_curve,
-        index=df.index
+        invested_list,
+        index=prices.index
     )
 
     return (
         equity,
         invested,
-        entry_count
+        entries
     )
 
 
 # ============================================================
-# 计算指标
+# 指标
 # ============================================================
 
-def calculate_metrics(equity):
+def metrics(equity):
 
     equity = equity.dropna()
 
     if len(equity) < 2:
 
         return {
-            "total_return": 0,
-            "annual_return": 0,
-            "max_drawdown": 0,
+            "return": 0,
+            "annual": 0,
+            "drawdown": 0,
             "sharpe": 0
         }
 
     total_return = (
         equity.iloc[-1]
-        / INITIAL_CAPITAL
+        / equity.iloc[0]
         - 1
     )
 
-    years = (
-        len(equity)
-        / 252
-    )
+    days = len(equity)
+
+    years = days / 252
 
     if years <= 0:
 
@@ -469,7 +442,8 @@ def calculate_metrics(equity):
     peak = equity.cummax()
 
     drawdown = (
-        equity / peak
+        equity
+        / peak
         - 1
     )
 
@@ -480,16 +454,17 @@ def calculate_metrics(equity):
     daily_return = (
         equity
         .pct_change()
-        .fillna(0)
+        .dropna()
     )
 
-    std = daily_return.std()
-
-    if std > 0:
+    if (
+        len(daily_return) > 1
+        and daily_return.std() > 0
+    ):
 
         sharpe = (
             daily_return.mean()
-            / std
+            / daily_return.std()
             * np.sqrt(252)
         )
 
@@ -499,326 +474,285 @@ def calculate_metrics(equity):
 
     return {
 
-        "total_return":
+        "return":
             total_return * 100,
 
-        "annual_return":
+        "annual":
             annual_return * 100,
 
-        "max_drawdown":
+        "drawdown":
             max_drawdown * 100,
 
         "sharpe":
             sharpe
+
     }
 
 
 # ============================================================
 # 策略评分
+#
+# 年化收益
+# Sharpe
+# 最大回撤
 # ============================================================
 
-def strategy_score(metrics):
+def score(m):
 
-    annual = metrics[
-        "annual_return"
-    ]
-
-    sharpe = metrics[
-        "sharpe"
-    ]
-
-    drawdown = abs(
-        metrics[
-            "max_drawdown"
-        ]
+    return (
+        m["annual"] * 0.5
+        + m["sharpe"] * 10 * 0.3
+        - abs(m["drawdown"]) * 0.2
     )
 
-    score = (
-        annual * 0.50
-        + sharpe * 10 * 0.30
-        - drawdown * 0.20
-    )
-
-    return score
-
 
 # ============================================================
-# 训练期选择参数
+# 找训练期最佳参数
 # ============================================================
 
-def find_best_parameter(
-    train_df
-):
+def optimize(train_df):
 
-    candidates = []
+    rows = []
 
-    for level in DRAWDOWN_LEVELS:
+    for step in DRAWDOWN_LEVELS:
 
         equity, invested, entries = (
-            backtest_tranche(
+            tranche_strategy(
                 train_df,
-                level
+                step
             )
         )
 
-        metrics = calculate_metrics(
+        m = metrics(
             equity
         )
 
-        score = strategy_score(
-            metrics
-        )
+        rows.append({
 
-        candidates.append({
-
-            "level":
-                level,
+            "step": step,
 
             "return":
-                metrics[
-                    "total_return"
-                ],
+                m["return"],
 
             "annual":
-                metrics[
-                    "annual_return"
-                ],
+                m["annual"],
 
             "drawdown":
-                metrics[
-                    "max_drawdown"
-                ],
+                m["drawdown"],
 
             "sharpe":
-                metrics[
-                    "sharpe"
-                ],
+                m["sharpe"],
 
             "score":
-                score,
+                score(m)
 
-            "entries":
-                entries
         })
 
-    candidates_df = pd.DataFrame(
-        candidates
+    result = pd.DataFrame(
+        rows
     )
 
-    best = candidates_df.sort_values(
+    best = result.sort_values(
         "score",
         ascending=False
     ).iloc[0]
 
     return (
         best,
-        candidates_df
+        result
     )
 
 
 # ============================================================
-# 验证期
+# 动态确定训练/验证窗口
+#
+# 不再强制252+126
+#
+# 原则：
+#
+# 数据 >= 500：
+# 训练252 + 验证126
+#
+# 数据 >= 360：
+# 训练约65% + 验证约35%
+#
+# 数据 < 360：
+# 尽可能70%训练 + 30%验证
 # ============================================================
 
-def evaluate_validation(
-    validation_df,
-    level
-):
+def get_window_size(n):
 
-    equity, invested, entries = (
-        backtest_tranche(
-            validation_df,
-            level
+    if n >= 500:
+
+        train_size = 252
+
+        validation_size = 126
+
+    elif n >= 360:
+
+        validation_size = int(
+            n * 0.30
         )
+
+        train_size = (
+            n
+            - validation_size
+        )
+
+    else:
+
+        validation_size = int(
+            n * 0.30
+        )
+
+        train_size = (
+            n
+            - validation_size
+        )
+
+    return (
+        train_size,
+        validation_size
     )
-
-    metrics = calculate_metrics(
-        equity
-    )
-
-    average_invested = (
-        invested.mean()
-    )
-
-    capital_utilization = (
-        average_invested
-        / INITIAL_CAPITAL
-        * 100
-    )
-
-    return {
-
-        "return":
-            metrics[
-                "total_return"
-            ],
-
-        "annual":
-            metrics[
-                "annual_return"
-            ],
-
-        "drawdown":
-            metrics[
-                "max_drawdown"
-            ],
-
-        "sharpe":
-            metrics[
-                "sharpe"
-            ],
-
-        "entries":
-            entries,
-
-        "capital_utilization":
-            capital_utilization
-    }
 
 
 # ============================================================
 # Walk Forward
-#
-# 每次：
-#
-# 训练252个交易日
-# 验证126个交易日
-#
-# 然后向前滚动126天。
-#
-# 参数只允许由训练期决定。
 # ============================================================
 
-def walk_forward_validation(
-    df
-):
-
-    df = df.copy()
+def walk_forward(df):
 
     n = len(df)
 
-    if n < 500:
+    if n < 250:
+
+        print(
+            "历史数据少于250个交易日"
+        )
 
         return None
 
-    train_size = 252
-
-    validation_size = 126
+    train_size, validation_size = (
+        get_window_size(n)
+    )
 
     results = []
 
     start = 0
 
-    window_id = 1
+    window = 1
 
-    while (
-        start
-        + train_size
-        + validation_size
-        <= n
-    ):
+    # --------------------------------------------------------
+    # 为避免只有一个窗口时重复使用大量数据，
+    # 这里采用滚动验证。
+    # --------------------------------------------------------
 
-        train_df = df.iloc[
-            start:
-            start + train_size
-        ]
+    while True:
 
-        validation_df = df.iloc[
-            start + train_size:
-            start + train_size
+        train_start = start
+
+        train_end = (
+            start
+            + train_size
+        )
+
+        validation_end = (
+            train_end
             + validation_size
+        )
+
+        if validation_end > n:
+
+            break
+
+        train = df.iloc[
+            train_start:
+            train_end
         ]
 
-        # ====================================================
-        # 训练期选择参数
-        # ====================================================
+        validation = df.iloc[
+            train_end:
+            validation_end
+        ]
 
-        best, candidates = (
-            find_best_parameter(
-                train_df
+        # ----------------------------------------------------
+        # 训练期优化
+        # ----------------------------------------------------
+
+        best, candidates = optimize(
+            train
+        )
+
+        selected_step = float(
+            best["step"]
+        )
+
+        # ----------------------------------------------------
+        # 样本外验证
+        # ----------------------------------------------------
+
+        equity, invested, entries = (
+            tranche_strategy(
+                validation,
+                selected_step
             )
         )
 
-        best_level = float(
-            best["level"]
+        m = metrics(
+            equity
         )
 
-        # ====================================================
-        # 验证期使用锁定参数
-        # ====================================================
-
-        validation = (
-            evaluate_validation(
-                validation_df,
-                best_level
-            )
+        utilization = (
+            invested.mean()
+            / INITIAL_CAPITAL
+            * 100
         )
 
         result = {
 
             "window":
-                window_id,
+                window,
 
             "train_start":
-                str(
-                    train_df.index[
-                        0
-                    ]
+                train.index[0].strftime(
+                    "%Y-%m-%d"
                 ),
 
             "train_end":
-                str(
-                    train_df.index[
-                        -1
-                    ]
+                train.index[-1].strftime(
+                    "%Y-%m-%d"
                 ),
 
             "validation_start":
-                str(
-                    validation_df.index[
-                        0
-                    ]
+                validation.index[0].strftime(
+                    "%Y-%m-%d"
                 ),
 
             "validation_end":
-                str(
-                    validation_df.index[
-                        -1
-                    ]
+                validation.index[-1].strftime(
+                    "%Y-%m-%d"
                 ),
 
             "selected_step":
-                f"{best_level * 100:.0f}%",
+                f"{selected_step * 100:.0f}%",
 
             "validation_return":
-                validation[
-                    "return"
-                ],
+                m["return"],
 
             "validation_annual":
-                validation[
-                    "annual"
-                ],
+                m["annual"],
 
             "validation_drawdown":
-                validation[
-                    "drawdown"
-                ],
+                m["drawdown"],
 
             "validation_sharpe":
-                validation[
-                    "sharpe"
-                ],
-
-            "validation_entries":
-                validation[
-                    "entries"
-                ],
+                m["sharpe"],
 
             "capital_utilization":
-                validation[
-                    "capital_utilization"
-                ]
+                utilization,
+
+            "entries":
+                entries
         }
 
         results.append(
@@ -828,60 +762,191 @@ def walk_forward_validation(
         print()
 
         print(
-            f"窗口 {window_id}"
+            f"窗口 {window}"
         )
 
         print(
             f"训练期："
-            f"{train_df.index[0]}"
+            f"{train.index[0].date()}"
             f" → "
-            f"{train_df.index[-1]}"
+            f"{train.index[-1].date()}"
         )
 
         print(
             f"验证期："
-            f"{validation_df.index[0]}"
+            f"{validation.index[0].date()}"
             f" → "
-            f"{validation_df.index[-1]}"
+            f"{validation.index[-1].date()}"
         )
 
         print(
-            "训练期选择："
-            f"{best_level * 100:.0f}%"
+            f"训练期选择："
+            f"{selected_step * 100:.0f}%"
         )
 
         print(
-            "验证期收益："
-            f"{validation['return']:.2f}%"
+            f"验证期收益："
+            f"{m['return']:.2f}%"
         )
 
         print(
-            "验证期年化："
-            f"{validation['annual']:.2f}%"
+            f"验证期年化："
+            f"{m['annual']:.2f}%"
         )
 
         print(
-            "验证期最大回撤："
-            f"{validation['drawdown']:.2f}%"
+            f"验证期最大回撤："
+            f"{m['drawdown']:.2f}%"
         )
 
         print(
-            "验证期Sharpe："
-            f"{validation['sharpe']:.2f}"
+            f"验证期Sharpe："
+            f"{m['sharpe']:.2f}"
         )
 
         print(
-            "平均资金使用率："
-            f"{validation['capital_utilization']:.2f}%"
+            f"平均资金使用率："
+            f"{utilization:.2f}%"
         )
 
-        start += validation_size
+        # ----------------------------------------------------
+        # 滚动
+        # ----------------------------------------------------
 
-        window_id += 1
+        if n >= 500:
+
+            step_forward = validation_size
+
+        else:
+
+            # 对短历史ETF只做一次主要样本外验证
+            step_forward = validation_size
+
+        start += step_forward
+
+        window += 1
 
     return pd.DataFrame(
         results
     )
+
+
+# ============================================================
+# 完整上市以来回测
+# ============================================================
+
+def full_backtest(df):
+
+    result = {}
+
+    # --------------------------------------------------------
+    # 买入持有
+    # --------------------------------------------------------
+
+    bh_equity = buy_hold(
+        df
+    )
+
+    bh = metrics(
+        bh_equity
+    )
+
+    result["buy_hold"] = bh
+
+    # --------------------------------------------------------
+    # 所有分批参数
+    # --------------------------------------------------------
+
+    candidates = []
+
+    for step in DRAWDOWN_LEVELS:
+
+        equity, invested, entries = (
+            tranche_strategy(
+                df,
+                step
+            )
+        )
+
+        m = metrics(
+            equity
+        )
+
+        candidates.append({
+
+            "step":
+                step,
+
+            "return":
+                m["return"],
+
+            "annual":
+                m["annual"],
+
+            "drawdown":
+                m["drawdown"],
+
+            "sharpe":
+                m["sharpe"],
+
+            "score":
+                score(m),
+
+            "entries":
+                entries,
+
+            "utilization":
+                invested.mean()
+                / INITIAL_CAPITAL
+                * 100
+        })
+
+    candidate_df = pd.DataFrame(
+        candidates
+    )
+
+    best = candidate_df.sort_values(
+        "score",
+        ascending=False
+    ).iloc[0]
+
+    result["best_step"] = (
+        best["step"]
+    )
+
+    result["best_return"] = (
+        best["return"]
+    )
+
+    result["best_annual"] = (
+        best["annual"]
+    )
+
+    result["best_drawdown"] = (
+        best["drawdown"]
+    )
+
+    result["best_sharpe"] = (
+        best["sharpe"]
+    )
+
+    result["best_score"] = (
+        best["score"]
+    )
+
+    result["best_entries"] = (
+        best["entries"]
+    )
+
+    result["best_utilization"] = (
+        best["utilization"]
+    )
+
+    result["all_candidates"] = (
+        candidate_df
+    )
+
+    return result
 
 
 # ============================================================
@@ -893,22 +958,22 @@ def main():
     print("=" * 70)
 
     print(
-        "ETF V7.1：本地数据滚动验证模型"
+        "ETF V7.2：上市以来完整回测 + 样本外验证"
     )
 
     print("=" * 70)
 
-    all_results = []
+    all_windows = []
 
-    summary_results = []
+    summary = []
+
+    full_results = []
 
     for item in ETF_LIST:
 
         code = item["code"]
 
         name = item["name"]
-
-        filename = item["file"]
 
         print()
 
@@ -920,191 +985,229 @@ def main():
 
         print("=" * 70)
 
-        df = load_local_data(
-            filename
+        df = load_data(
+            item["file"]
         )
 
         if df is None:
 
             print(
-                "数据读取失败，跳过"
+                "数据读取失败"
             )
 
             continue
 
-        result_df = (
-            walk_forward_validation(
-                df
-            )
+        # ====================================================
+        # 完整历史回测
+        # ====================================================
+
+        print()
+
+        print(
+            "【上市以来完整回测】"
         )
 
-        if (
-            result_df is None
-            or result_df.empty
-        ):
+        full = full_backtest(
+            df
+        )
 
-            print(
-                "数据不足，无法验证"
-            )
+        bh = full[
+            "buy_hold"
+        ]
 
-            continue
+        print()
 
-        result_df[
+        print(
+            f"买入持有收益："
+            f"{bh['return']:.2f}%"
+        )
+
+        print(
+            f"买入持有年化："
+            f"{bh['annual']:.2f}%"
+        )
+
+        print(
+            f"买入持有最大回撤："
+            f"{bh['drawdown']:.2f}%"
+        )
+
+        print(
+            f"买入持有Sharpe："
+            f"{bh['sharpe']:.2f}"
+        )
+
+        print()
+
+        print(
+            f"V6/V7最优加仓间距："
+            f"{full['best_step'] * 100:.0f}%"
+        )
+
+        print(
+            f"完整历史策略收益："
+            f"{full['best_return']:.2f}%"
+        )
+
+        print(
+            f"完整历史策略年化："
+            f"{full['best_annual']:.2f}%"
+        )
+
+        print(
+            f"完整历史策略最大回撤："
+            f"{full['best_drawdown']:.2f}%"
+        )
+
+        print(
+            f"完整历史策略Sharpe："
+            f"{full['best_sharpe']:.2f}"
+        )
+
+        print(
+            f"平均资金使用率："
+            f"{full['best_utilization']:.2f}%"
+        )
+
+        # ====================================================
+        # 保存完整参数比较
+        # ====================================================
+
+        candidate_df = (
+            full[
+                "all_candidates"
+            ].copy()
+        )
+
+        candidate_df[
             "code"
         ] = code
 
-        result_df[
+        candidate_df[
             "name"
         ] = name
 
-        all_results.append(
-            result_df
+        full_results.append(
+            candidate_df
+        )
+
+        # ====================================================
+        # Walk Forward
+        # ====================================================
+
+        print()
+
+        print(
+            "【样本外滚动验证】"
+        )
+
+        wf = walk_forward(
+            df
+        )
+
+        if (
+            wf is None
+            or wf.empty
+        ):
+
+            print(
+                "无法进行样本外验证"
+            )
+
+            continue
+
+        wf[
+            "code"
+        ] = code
+
+        wf[
+            "name"
+        ] = name
+
+        all_windows.append(
+            wf
         )
 
         # ====================================================
         # 汇总
         # ====================================================
 
+        windows = len(
+            wf
+        )
+
+        positive = (
+            wf[
+                "validation_return"
+            ] > 0
+        ).sum()
+
+        win_rate = (
+            positive
+            / windows
+            * 100
+        )
+
         average_return = (
-            result_df[
+            wf[
                 "validation_return"
             ].mean()
         )
 
         average_annual = (
-            result_df[
+            wf[
                 "validation_annual"
             ].mean()
         )
 
         average_drawdown = (
-            result_df[
+            wf[
                 "validation_drawdown"
             ].mean()
         )
 
         average_sharpe = (
-            result_df[
+            wf[
                 "validation_sharpe"
             ].mean()
         )
 
         average_utilization = (
-            result_df[
+            wf[
                 "capital_utilization"
             ].mean()
         )
 
-        positive_windows = (
-            (
-                result_df[
-                    "validation_return"
-                ] > 0
-            ).sum()
-        )
-
-        total_windows = len(
-            result_df
-        )
-
-        win_rate = (
-            positive_windows
-            / total_windows
-            * 100
-        )
-
-        parameter_counts = (
-            result_df[
+        counts = (
+            wf[
                 "selected_step"
-            ]
-            .value_counts()
+            ].value_counts()
         )
 
-        most_common_parameter = (
-            parameter_counts
-            .index[0]
+        most_common = (
+            counts.index[0]
         )
 
-        parameter_stability = (
-            parameter_counts.iloc[0]
-            / total_windows
+        stability = (
+            counts.iloc[0]
+            / windows
             * 100
         )
-
-        summary_results.append({
-
-            "code":
-                code,
-
-            "name":
-                name,
-
-            "windows":
-                total_windows,
-
-            "positive_windows":
-                positive_windows,
-
-            "win_rate":
-                round(
-                    win_rate,
-                    2
-                ),
-
-            "average_return":
-                round(
-                    average_return,
-                    2
-                ),
-
-            "average_annual":
-                round(
-                    average_annual,
-                    2
-                ),
-
-            "average_drawdown":
-                round(
-                    average_drawdown,
-                    2
-                ),
-
-            "average_sharpe":
-                round(
-                    average_sharpe,
-                    2
-                ),
-
-            "average_capital_utilization":
-                round(
-                    average_utilization,
-                    2
-                ),
-
-            "most_common_step":
-                most_common_parameter,
-
-            "parameter_stability":
-                round(
-                    parameter_stability,
-                    2
-                )
-        })
 
         print()
 
         print(
-            "V7.1汇总："
+            "V7.2汇总："
         )
 
         print(
             f"验证窗口："
-            f"{total_windows}"
+            f"{windows}"
         )
 
         print(
             f"正收益窗口："
-            f"{positive_windows}"
+            f"{positive}"
         )
 
         print(
@@ -1139,68 +1242,207 @@ def main():
 
         print(
             f"最常出现参数："
-            f"{most_common_parameter}"
+            f"{most_common}"
         )
 
         print(
             f"参数稳定性："
-            f"{parameter_stability:.2f}%"
+            f"{stability:.2f}%"
         )
 
+        summary.append({
+
+            "code":
+                code,
+
+            "name":
+                name,
+
+            "data_start":
+                df.index[0].strftime(
+                    "%Y-%m-%d"
+                ),
+
+            "data_end":
+                df.index[-1].strftime(
+                    "%Y-%m-%d"
+                ),
+
+            "data_days":
+                len(df),
+
+            "buy_hold_return":
+                round(
+                    bh["return"],
+                    2
+                ),
+
+            "buy_hold_annual":
+                round(
+                    bh["annual"],
+                    2
+                ),
+
+            "buy_hold_drawdown":
+                round(
+                    bh["drawdown"],
+                    2
+                ),
+
+            "buy_hold_sharpe":
+                round(
+                    bh["sharpe"],
+                    2
+                ),
+
+            "best_step":
+                f"{full['best_step'] * 100:.0f}%",
+
+            "full_strategy_return":
+                round(
+                    full["best_return"],
+                    2
+                ),
+
+            "full_strategy_annual":
+                round(
+                    full["best_annual"],
+                    2
+                ),
+
+            "full_strategy_drawdown":
+                round(
+                    full["best_drawdown"],
+                    2
+                ),
+
+            "full_strategy_sharpe":
+                round(
+                    full["best_sharpe"],
+                    2
+                ),
+
+            "validation_windows":
+                windows,
+
+            "validation_win_rate":
+                round(
+                    win_rate,
+                    2
+                ),
+
+            "validation_average_return":
+                round(
+                    average_return,
+                    2
+                ),
+
+            "validation_average_annual":
+                round(
+                    average_annual,
+                    2
+                ),
+
+            "validation_average_drawdown":
+                round(
+                    average_drawdown,
+                    2
+                ),
+
+            "validation_average_sharpe":
+                round(
+                    average_sharpe,
+                    2
+                ),
+
+            "validation_capital_utilization":
+                round(
+                    average_utilization,
+                    2
+                ),
+
+            "validation_most_common_step":
+                most_common,
+
+            "parameter_stability":
+                round(
+                    stability,
+                    2
+                )
+        })
+
     # ========================================================
-    # 保存全部窗口
+    # 保存结果
     # ========================================================
 
-    if all_results:
+    if all_windows:
 
-        all_df = pd.concat(
-            all_results,
+        windows_df = pd.concat(
+            all_windows,
             ignore_index=True
         )
 
-        all_df.to_csv(
+        windows_df.to_csv(
             os.path.join(
                 DATA_DIR,
-                "etf_v7_walk_forward.csv"
+                "etf_v7_2_walk_forward.csv"
             ),
             index=False,
             encoding="utf-8-sig"
         )
 
-    # ========================================================
-    # 保存汇总
-    # ========================================================
+    if full_results:
+
+        full_df = pd.concat(
+            full_results,
+            ignore_index=True
+        )
+
+        full_df.to_csv(
+            os.path.join(
+                DATA_DIR,
+                "etf_v7_2_full_backtest.csv"
+            ),
+            index=False,
+            encoding="utf-8-sig"
+        )
 
     summary_df = pd.DataFrame(
-        summary_results
+        summary
     )
 
     summary_df.to_csv(
         os.path.join(
             DATA_DIR,
-            "etf_v7_summary.csv"
+            "etf_v7_2_summary.csv"
         ),
         index=False,
         encoding="utf-8-sig"
     )
 
+    # ========================================================
+    # 最终结果
+    # ========================================================
+
     print()
 
     print("=" * 70)
 
     print(
-        "V7.1滚动验证完成"
+        "V7.2完成"
     )
 
     print("=" * 70)
 
     print()
 
-    print(
-        summary_df.to_string(
-            index=False
+    if not summary_df.empty:
+
+        print(
+            summary_df.to_string(
+                index=False
+            )
         )
-    )
 
     print()
 
@@ -1209,11 +1451,15 @@ def main():
     )
 
     print(
-        "data/etf_v7_walk_forward.csv"
+        "data/etf_v7_2_summary.csv"
     )
 
     print(
-        "data/etf_v7_summary.csv"
+        "data/etf_v7_2_full_backtest.csv"
+    )
+
+    print(
+        "data/etf_v7_2_walk_forward.csv"
     )
 
 
