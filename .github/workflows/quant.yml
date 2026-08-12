@@ -141,3 +141,10 @@ jobs:
       - name: Run ETF V5 backtest
         run: |
           python backtest_etf_v5.py
+                # =====================================================
+      # ETF V6：10万元分批建仓优化
+      # =====================================================
+
+      - name: Run ETF V6 backtest
+        run: |
+          python backtest_etf_v6.py
