@@ -1,0 +1,7 @@
+﻿rank,type,code,name,strategy_total_return,buy_hold_total_return,strategy_annual_return,buy_hold_annual_return,max_drawdown,sharpe,trade_count
+1,stock,601318,中国平安,27.76,8.14,8.87,2.75,-17.59,0.55,14
+2,stock,300750,宁德时代,14.1,66.64,4.68,19.39,-35.92,0.3,18
+3,etf,159399,现金流ETF,-0.76,1.1,-0.53,0.78,-9.44,-0.01,5
+4,etf,159209,红利质量ETF,-2.5,16.5,-1.86,11.98,-10.38,-0.14,6
+5,etf,159581,红利ETF,-15.43,5.8,-6.95,2.45,-21.78,-0.57,13
+6,stock,600519,贵州茅台,-33.98,-25.38,-13.42,-9.66,-33.98,-1.32,17
