@@ -47,17 +47,17 @@ ETF_LIST = [
     {
         "code": "159209",
         "name": "红利质量ETF",
-        "file": "etf_159209-signals.csv"
+        "file": "etf_159209_signals.csv"
     },
     {
         "code": "159399",
         "name": "现金流ETF",
-        "file": "etf_159399-signals.csv"
+        "file": "etf_159399_signals.csv"
     },
     {
         "code": "159581",
         "name": "红利ETF",
-        "file": "etf_159581-signals.csv"
+        "file": "etf_159581_signals.csv"
     }
 ]
 
