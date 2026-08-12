@@ -7,14 +7,17 @@ permissions:
   contents: write
 
 jobs:
+
   update:
+
     runs-on: ubuntu-latest
 
     steps:
 
       # =====================================================
-      # 1. 获取 GitHub 仓库代码
+      # 1. 下载仓库
       # =====================================================
+
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
@@ -23,6 +26,7 @@ jobs:
       # =====================================================
       # 2. 安装 Python
       # =====================================================
+
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
@@ -31,62 +35,102 @@ jobs:
       # =====================================================
       # 3. 安装依赖
       # =====================================================
+
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
       # =====================================================
-      # 4. 更新量化数据
+      # 4. 更新股票和ETF数据
       # =====================================================
-      - name: Run quant model
+
+      - name: Update quant data
         run: |
           python update_data.py
 
       # =====================================================
-      # 5. 运行历史回测
+      # 5. ETF V4 专用回测
       # =====================================================
-      - name: Run backtest
+
+      - name: Run ETF V4 backtest
         run: |
-          python backtest.py
+          python backtest_etf.py
 
       # =====================================================
-      # 6. 检查结果文件
+      # 6. 检查结果
       # =====================================================
+
       - name: Check result files
         run: |
-          echo "========== data directory =========="
+
+          echo "========================================"
+          echo "检查 data 文件夹"
+          echo "========================================"
+
           ls -lah data/
 
-          echo "========== quant result =========="
+          echo ""
+          echo "检查 quant_result.csv"
+
           if [ -f data/quant_result.csv ]; then
-            echo "quant_result.csv OK"
+            echo "OK: quant_result.csv"
           else
-            echo "ERROR: quant_result.csv not found"
+            echo "ERROR: quant_result.csv 不存在"
             exit 1
           fi
 
-          echo "========== backtest result =========="
-          if [ -f data/backtest_result.csv ]; then
-            echo "backtest_result.csv OK"
+          echo ""
+          echo "检查 etf_backtest_result.csv"
+
+          if [ -f data/etf_backtest_result.csv ]; then
+            echo "OK: etf_backtest_result.csv"
           else
-            echo "ERROR: backtest_result.csv not found"
+            echo "ERROR: etf_backtest_result.csv 不存在"
+            exit 1
+          fi
+
+          echo ""
+          echo "检查 etf_rotation_result.csv"
+
+          if [ -f data/etf_rotation_result.csv ]; then
+            echo "OK: etf_rotation_result.csv"
+          else
+            echo "ERROR: etf_rotation_result.csv 不存在"
+            exit 1
+          fi
+
+          echo ""
+          echo "检查 etf_ranking.csv"
+
+          if [ -f data/etf_ranking.csv ]; then
+            echo "OK: etf_ranking.csv"
+          else
+            echo "ERROR: etf_ranking.csv 不存在"
             exit 1
           fi
 
       # =====================================================
-      # 7. 保存结果到 GitHub
+      # 7. 保存所有结果
       # =====================================================
+
       - name: Save results
         run: |
+
           git config user.name "github-actions[bot]"
+
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
           git add data/
 
           if git diff --cached --quiet; then
-            echo "No changes to commit"
+
+            echo "没有新的数据变化"
+
           else
-            git commit -m "Update quant results and backtest"
+
+            git commit -m "Update ETF V4 quant and backtest results"
+
             git push
+
           fi
