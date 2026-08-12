@@ -29,11 +29,12 @@ jobs:
       - name: Run quant model
         run: |
           python update_data.py
-
-      - name: Save results
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add data/quant_result.csv
-          git diff --cached --quiet || git commit -m "Update quant results"
-          git push
+          python backtest.py
+          
+     - name: Save results
+  run: |
+    git config user.name "github-actions[bot]"
+    git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+    git add data/
+    git diff --cached --quiet || git commit -m "Update quant results and backtest"
+    git push
