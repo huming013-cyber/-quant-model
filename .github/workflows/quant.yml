@@ -3,7 +3,7 @@ name: Quant Update
 on:
   workflow_dispatch:
   schedule:
-    - cron: "30 1 * * 1-5"
+    - cron: "30 8 * * 1-5"
 
 permissions:
   contents: write
