@@ -7,20 +7,16 @@ warnings.filterwarnings("ignore")
 
 
 # ============================================================
-# ETF V7.2
-# 上市以来完整回测 + 样本外滚动验证
+# ETF V7.3
+# 上市以来完整回测 + 严格滚动样本外验证
 #
-# 数据来源：
-# data/etf_159209_signals.csv
-# data/etf_159399_signals.csv
-# data/etf_159581_signals.csv
-#
-# 重要：
-# 1. 不人为补充上市以前的数据
-# 2. 每只ETF按照自己的真实历史长度计算
-# 3. 历史不足时自动减少验证窗口
-# 4. 训练期选择参数
-# 5. 验证期锁定参数，不重新优化
+# 核心原则：
+# 1. 只使用ETF真实存在的历史数据
+# 2. 不补上市以前的数据
+# 3. 不使用验证期数据选择参数
+# 4. 每个验证窗口的参数只由训练期决定
+# 5. 最后一个验证窗口必须覆盖最新数据
+# 6. 同时进行完整历史回测
 # ============================================================
 
 
@@ -49,7 +45,7 @@ DRAWDOWN_LEVELS = [
 
 
 # ============================================================
-# ETF列表
+# ETF
 # ============================================================
 
 ETF_LIST = [
@@ -76,7 +72,7 @@ ETF_LIST = [
 
 
 # ============================================================
-# 读取本地数据
+# 读取数据
 # ============================================================
 
 def load_data(filename):
@@ -87,38 +83,29 @@ def load_data(filename):
     )
 
     print()
-
     print(
         f"读取本地数据：{path}"
     )
 
     if not os.path.exists(path):
 
-        print(
-            "文件不存在"
-        )
+        print("文件不存在")
 
         return None
 
     try:
 
-        df = pd.read_csv(
-            path
-        )
+        df = pd.read_csv(path)
 
         if df.empty:
 
-            print(
-                "CSV为空"
-            )
+            print("CSV为空")
 
             return None
 
         print(
             "原始字段："
-            + str(
-                list(df.columns)
-            )
+            + str(list(df.columns))
         )
 
         # ----------------------------------------------------
@@ -144,9 +131,7 @@ def load_data(filename):
 
         if date_col is None:
 
-            print(
-                "找不到日期字段"
-            )
+            print("找不到日期字段")
 
             return None
 
@@ -190,9 +175,7 @@ def load_data(filename):
 
         if price_col is None:
 
-            print(
-                "找不到价格字段"
-            )
+            print("找不到价格字段")
 
             return None
 
@@ -208,10 +191,6 @@ def load_data(filename):
         df = df[
             df["Close"] > 0
         ]
-
-        # ----------------------------------------------------
-        # 去重
-        # ----------------------------------------------------
 
         df = df[
             ~df.index.duplicated(
@@ -263,11 +242,11 @@ def buy_hold(df):
 # ============================================================
 # 分批建仓
 #
-# 总资金100000
+# 100000元
 #
-# 20000第一笔
+# 第一笔20000
 #
-# 后面每跌一个指定百分比加20000
+# 每达到一个回撤级别加20000
 #
 # 最多5笔
 # ============================================================
@@ -281,7 +260,7 @@ def tranche_strategy(
 
     cash = INITIAL_CAPITAL
 
-    shares = 0
+    shares = 0.0
 
     first_price = None
 
@@ -363,10 +342,6 @@ def tranche_strategy(
                     )
 
                     entries += 1
-
-        # ----------------------------------------------------
-        # 每日资产
-        # ----------------------------------------------------
 
         equity = (
             cash
@@ -490,24 +465,25 @@ def metrics(equity):
 
 
 # ============================================================
-# 策略评分
+# 参数评分
 #
-# 年化收益
-# Sharpe
-# 最大回撤
+# 注意：
+# 只用于训练期
+#
+# 验证期绝对不参与参数选择
 # ============================================================
 
 def score(m):
 
     return (
-        m["annual"] * 0.5
-        + m["sharpe"] * 10 * 0.3
-        - abs(m["drawdown"]) * 0.2
+        m["annual"] * 0.50
+        + m["sharpe"] * 10 * 0.30
+        - abs(m["drawdown"]) * 0.20
     )
 
 
 # ============================================================
-# 找训练期最佳参数
+# 训练期寻找最佳参数
 # ============================================================
 
 def optimize(train_df):
@@ -529,7 +505,8 @@ def optimize(train_df):
 
         rows.append({
 
-            "step": step,
+            "step":
+                step,
 
             "return":
                 m["return"],
@@ -564,23 +541,33 @@ def optimize(train_df):
 
 
 # ============================================================
-# 动态确定训练/验证窗口
+# 创建严格滚动验证窗口
 #
-# 不再强制252+126
-#
-# 原则：
+# 设计：
 #
 # 数据 >= 500：
-# 训练252 + 验证126
+# 训练252交易日
+# 验证126交易日
 #
-# 数据 >= 360：
-# 训练约65% + 验证约35%
+# 数据 < 500：
+# 训练约70%
+# 验证约30%
 #
-# 数据 < 360：
-# 尽可能70%训练 + 30%验证
+# 最关键：
+#
+# 如果最后剩余数据不足一个完整验证窗口，
+# 则把最后一个验证窗口右对齐到最新日期。
+#
+# 这样可以保证最新数据一定进入样本外验证。
 # ============================================================
 
-def get_window_size(n):
+def create_windows(n):
+
+    windows = []
+
+    if n < 250:
+
+        return windows
 
     if n >= 500:
 
@@ -588,19 +575,91 @@ def get_window_size(n):
 
         validation_size = 126
 
-    elif n >= 360:
+        # ----------------------------------------------------
+        # 正常滚动
+        # ----------------------------------------------------
 
-        validation_size = int(
-            n * 0.30
-        )
+        start = 0
 
-        train_size = (
+        while (
+            start
+            + train_size
+            + validation_size
+            <= n
+        ):
+
+            train_start = start
+
+            train_end = (
+                start
+                + train_size
+            )
+
+            validation_end = (
+                train_end
+                + validation_size
+            )
+
+            windows.append(
+                (
+                    train_start,
+                    train_end,
+                    validation_end
+                )
+            )
+
+            start += validation_size
+
+        # ----------------------------------------------------
+        # 最后窗口右对齐
+        #
+        # 如果最后一段没有完整验证窗口，
+        # 就让验证期覆盖到最后一天。
+        # ----------------------------------------------------
+
+        final_validation_end = n
+
+        final_validation_start = (
             n
             - validation_size
         )
+
+        final_train_end = (
+            final_validation_start
+        )
+
+        final_train_start = (
+            final_train_end
+            - train_size
+        )
+
+        if final_train_start >= 0:
+
+            final_window = (
+                final_train_start,
+                final_train_end,
+                final_validation_end
+            )
+
+            if (
+                not windows
+                or windows[-1]
+                != final_window
+            ):
+
+                windows.append(
+                    final_window
+                )
 
     else:
 
+        # ----------------------------------------------------
+        # 历史较短ETF
+        #
+        # 一个主要样本外窗口，
+        # 训练70%，验证30%
+        # ----------------------------------------------------
+
         validation_size = int(
             n * 0.30
         )
@@ -610,10 +669,15 @@ def get_window_size(n):
             - validation_size
         )
 
-    return (
-        train_size,
-        validation_size
-    )
+        windows.append(
+            (
+                0,
+                train_size,
+                n
+            )
+        )
+
+    return windows
 
 
 # ============================================================
@@ -624,46 +688,28 @@ def walk_forward(df):
 
     n = len(df)
 
-    if n < 250:
+    windows = create_windows(
+        n
+    )
+
+    if not windows:
 
         print(
-            "历史数据少于250个交易日"
+            "历史数据不足，无法验证"
         )
 
         return None
 
-    train_size, validation_size = (
-        get_window_size(n)
-    )
-
     results = []
 
-    start = 0
-
-    window = 1
-
-    # --------------------------------------------------------
-    # 为避免只有一个窗口时重复使用大量数据，
-    # 这里采用滚动验证。
-    # --------------------------------------------------------
-
-    while True:
-
-        train_start = start
-
-        train_end = (
-            start
-            + train_size
-        )
-
-        validation_end = (
-            train_end
-            + validation_size
-        )
-
-        if validation_end > n:
-
-            break
+    for i, (
+        train_start,
+        train_end,
+        validation_end
+    ) in enumerate(
+        windows,
+        start=1
+    ):
 
         train = df.iloc[
             train_start:
@@ -675,8 +721,12 @@ def walk_forward(df):
             validation_end
         ]
 
+        if len(validation) < 2:
+
+            continue
+
         # ----------------------------------------------------
-        # 训练期优化
+        # 参数只从训练期选择
         # ----------------------------------------------------
 
         best, candidates = optimize(
@@ -711,7 +761,7 @@ def walk_forward(df):
         result = {
 
             "window":
-                window,
+                i,
 
             "train_start":
                 train.index[0].strftime(
@@ -762,7 +812,7 @@ def walk_forward(df):
         print()
 
         print(
-            f"窗口 {window}"
+            f"窗口 {i}"
         )
 
         print(
@@ -809,22 +859,9 @@ def walk_forward(df):
             f"{utilization:.2f}%"
         )
 
-        # ----------------------------------------------------
-        # 滚动
-        # ----------------------------------------------------
+    if not results:
 
-        if n >= 500:
-
-            step_forward = validation_size
-
-        else:
-
-            # 对短历史ETF只做一次主要样本外验证
-            step_forward = validation_size
-
-        start += step_forward
-
-        window += 1
+        return None
 
     return pd.DataFrame(
         results
@@ -836,8 +873,6 @@ def walk_forward(df):
 # ============================================================
 
 def full_backtest(df):
-
-    result = {}
 
     # --------------------------------------------------------
     # 买入持有
@@ -851,10 +886,8 @@ def full_backtest(df):
         bh_equity
     )
 
-    result["buy_hold"] = bh
-
     # --------------------------------------------------------
-    # 所有分批参数
+    # 分批参数
     # --------------------------------------------------------
 
     candidates = []
@@ -910,43 +943,71 @@ def full_backtest(df):
         ascending=False
     ).iloc[0]
 
-    result["best_step"] = (
-        best["step"]
+    return {
+
+        "buy_hold":
+            bh,
+
+        "best_step":
+            best["step"],
+
+        "best_return":
+            best["return"],
+
+        "best_annual":
+            best["annual"],
+
+        "best_drawdown":
+            best["drawdown"],
+
+        "best_sharpe":
+            best["sharpe"],
+
+        "best_score":
+            best["score"],
+
+        "best_entries":
+            best["entries"],
+
+        "best_utilization":
+            best["utilization"],
+
+        "all_candidates":
+            candidate_df
+
+    }
+
+
+# ============================================================
+# 综合判断
+#
+# 不是投资建议。
+# 这里只用于量化模型排名。
+# ============================================================
+
+def final_model_score(row):
+
+    validation_score = (
+        row["validation_win_rate"] * 0.25
+        + row["validation_average_sharpe"] * 20 * 0.25
+        + row["parameter_stability"] * 0.10
+        - abs(
+            row["validation_average_drawdown"]
+        ) * 0.10
     )
 
-    result["best_return"] = (
-        best["return"]
+    historical_score = (
+        row["full_strategy_annual"] * 0.15
+        + row["full_strategy_sharpe"] * 10 * 0.10
+        - abs(
+            row["full_strategy_drawdown"]
+        ) * 0.05
     )
 
-    result["best_annual"] = (
-        best["annual"]
+    return (
+        validation_score
+        + historical_score
     )
-
-    result["best_drawdown"] = (
-        best["drawdown"]
-    )
-
-    result["best_sharpe"] = (
-        best["sharpe"]
-    )
-
-    result["best_score"] = (
-        best["score"]
-    )
-
-    result["best_entries"] = (
-        best["entries"]
-    )
-
-    result["best_utilization"] = (
-        best["utilization"]
-    )
-
-    result["all_candidates"] = (
-        candidate_df
-    )
-
-    return result
 
 
 # ============================================================
@@ -958,16 +1019,16 @@ def main():
     print("=" * 70)
 
     print(
-        "ETF V7.2：上市以来完整回测 + 样本外验证"
+        "ETF V7.3：上市以来完整回测 + 严格滚动样本外验证"
     )
 
     print("=" * 70)
 
     all_windows = []
 
-    summary = []
-
     full_results = []
+
+    summary = []
 
     for item in ETF_LIST:
 
@@ -998,7 +1059,7 @@ def main():
             continue
 
         # ====================================================
-        # 完整历史回测
+        # 完整历史
         # ====================================================
 
         print()
@@ -1040,7 +1101,7 @@ def main():
         print()
 
         print(
-            f"V6/V7最优加仓间距："
+            f"完整历史最优加仓间距："
             f"{full['best_step'] * 100:.0f}%"
         )
 
@@ -1069,9 +1130,9 @@ def main():
             f"{full['best_utilization']:.2f}%"
         )
 
-        # ====================================================
-        # 保存完整参数比较
-        # ====================================================
+        # ----------------------------------------------------
+        # 保存参数比较
+        # ----------------------------------------------------
 
         candidate_df = (
             full[
@@ -1092,13 +1153,13 @@ def main():
         )
 
         # ====================================================
-        # Walk Forward
+        # 样本外
         # ====================================================
 
         print()
 
         print(
-            "【样本外滚动验证】"
+            "【严格滚动样本外验证】"
         )
 
         wf = walk_forward(
@@ -1184,11 +1245,11 @@ def main():
             ].value_counts()
         )
 
-        most_common = (
+        most_common_step = (
             counts.index[0]
         )
 
-        stability = (
+        parameter_stability = (
             counts.iloc[0]
             / windows
             * 100
@@ -1197,7 +1258,7 @@ def main():
         print()
 
         print(
-            "V7.2汇总："
+            "V7.3汇总："
         )
 
         print(
@@ -1242,12 +1303,12 @@ def main():
 
         print(
             f"最常出现参数："
-            f"{most_common}"
+            f"{most_common_step}"
         )
 
         print(
             f"参数稳定性："
-            f"{stability:.2f}%"
+            f"{parameter_stability:.2f}%"
         )
 
         summary.append({
@@ -1362,17 +1423,52 @@ def main():
                 ),
 
             "validation_most_common_step":
-                most_common,
+                most_common_step,
 
             "parameter_stability":
                 round(
-                    stability,
+                    parameter_stability,
                     2
                 )
         })
 
     # ========================================================
-    # 保存结果
+    # 生成汇总
+    # ========================================================
+
+    summary_df = pd.DataFrame(
+        summary
+    )
+
+    if not summary_df.empty:
+
+        summary_df[
+            "model_score"
+        ] = summary_df.apply(
+            final_model_score,
+            axis=1
+        )
+
+        summary_df = (
+            summary_df
+            .sort_values(
+                "model_score",
+                ascending=False
+            )
+            .reset_index(
+                drop=True
+            )
+        )
+
+        summary_df[
+            "final_rank"
+        ] = (
+            summary_df.index
+            + 1
+        )
+
+    # ========================================================
+    # 保存
     # ========================================================
 
     if all_windows:
@@ -1385,7 +1481,7 @@ def main():
         windows_df.to_csv(
             os.path.join(
                 DATA_DIR,
-                "etf_v7_2_walk_forward.csv"
+                "etf_v7_3_walk_forward.csv"
             ),
             index=False,
             encoding="utf-8-sig"
@@ -1401,27 +1497,23 @@ def main():
         full_df.to_csv(
             os.path.join(
                 DATA_DIR,
-                "etf_v7_2_full_backtest.csv"
+                "etf_v7_3_full_backtest.csv"
             ),
             index=False,
             encoding="utf-8-sig"
         )
 
-    summary_df = pd.DataFrame(
-        summary
-    )
-
     summary_df.to_csv(
         os.path.join(
             DATA_DIR,
-            "etf_v7_2_summary.csv"
+            "etf_v7_3_summary.csv"
         ),
         index=False,
         encoding="utf-8-sig"
     )
 
     # ========================================================
-    # 最终结果
+    # 最终排名
     # ========================================================
 
     print()
@@ -1429,20 +1521,50 @@ def main():
     print("=" * 70)
 
     print(
-        "V7.2完成"
+        "V7.3最终排名"
     )
 
     print("=" * 70)
 
-    print()
-
     if not summary_df.empty:
 
+        print()
+
         print(
-            summary_df.to_string(
+            summary_df[
+                [
+                    "final_rank",
+                    "code",
+                    "name",
+                    "best_step",
+                    "full_strategy_return",
+                    "full_strategy_annual",
+                    "full_strategy_drawdown",
+                    "full_strategy_sharpe",
+                    "validation_windows",
+                    "validation_win_rate",
+                    "validation_average_return",
+                    "validation_average_annual",
+                    "validation_average_drawdown",
+                    "validation_average_sharpe",
+                    "validation_most_common_step",
+                    "parameter_stability",
+                    "model_score"
+                ]
+            ].to_string(
                 index=False
             )
         )
+
+    print()
+
+    print("=" * 70)
+
+    print(
+        "V7.3完成"
+    )
+
+    print("=" * 70)
 
     print()
 
@@ -1451,15 +1573,15 @@ def main():
     )
 
     print(
-        "data/etf_v7_2_summary.csv"
+        "data/etf_v7_3_summary.csv"
     )
 
     print(
-        "data/etf_v7_2_full_backtest.csv"
+        "data/etf_v7_3_full_backtest.csv"
     )
 
     print(
-        "data/etf_v7_2_walk_forward.csv"
+        "data/etf_v7_3_walk_forward.csv"
     )
 
 
