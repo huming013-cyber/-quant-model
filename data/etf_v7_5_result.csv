@@ -1,0 +1,4 @@
+﻿final_rank,code,name,data_start,data_end,data_days,buy_hold_return,buy_hold_annual,buy_hold_drawdown,buy_hold_sharpe,original_return,original_annual,original_drawdown,original_sharpe,original_capital_usage,v75_return,v75_annual,v75_drawdown,v75_sharpe,v75_capital_usage,v75_buy_count,v75_sell_count,risk_protection_count,return_vs_buy_hold,drawdown_improvement,sharpe_improvement,model_score
+1,159209,红利质量ETF,2025-03-12,2026-08-12,340,16.5,11.36,-20.86,0.74,8.54,5.95,-10.01,0.87,46.08,6.96,4.86,-7.26,0.82,39.72,2,1,1,-9.54,13.6,0.08,26.96
+2,159399,现金流ETF,2025-02-19,2026-08-12,357,1.5,1.01,-26.26,0.15,2.32,1.56,-12.1,0.28,43.23,-0.78,-0.53,-3.57,-0.17,16.36,2,2,2,-2.28,22.69,-0.31,8.865
+3,159581,红利ETF,2024-03-06,2026-08-12,586,6.0,2.42,-15.57,0.24,6.17,2.49,-9.33,0.33,56.7,-5.25,-2.19,-6.8,-0.5,32.17,5,2,2,-11.25,8.77,-0.74,-5.865
