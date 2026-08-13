@@ -4,6 +4,7 @@ on:
   workflow_dispatch:
 
   schedule:
+    # 每个交易日北京时间 16:30 左右运行
     - cron: "30 8 * * 1-5"
 
 permissions:
@@ -16,7 +17,7 @@ jobs:
     steps:
 
       # =====================================================
-      # 1. 获取代码
+      # 1. 获取最新代码
       # =====================================================
 
       - name: Checkout
@@ -41,7 +42,7 @@ jobs:
           pip install -r requirements.txt
 
       # =====================================================
-      # 4. 更新 ETF 数据
+      # 4. 更新 ETF 最新数据
       # =====================================================
 
       - name: Update ETF data
@@ -49,7 +50,7 @@ jobs:
           python update_data.py
 
       # =====================================================
-      # 5. V7.3 / V7.4 历史回测
+      # 5. V7.3 历史回测
       # =====================================================
 
       - name: Run V7 Backtest
@@ -57,7 +58,7 @@ jobs:
           python backtest_etf_v7.py
 
       # =====================================================
-      # 6. V7.4.1 建仓信号严格样本外验证
+      # 6. V7.4.1 严格样本外验证
       # =====================================================
 
       - name: Run V7.4.1 Entry Validation
@@ -89,7 +90,7 @@ jobs:
           python backtest_etf_v7_6.py
 
       # =====================================================
-      # 10. V8 最终模型评价
+      # 10. V8 模型冻结 + 严格样本外最终评价
       # =====================================================
 
       - name: Run V8 Final Evaluation
@@ -97,7 +98,7 @@ jobs:
           python backtest_etf_v8.py
 
       # =====================================================
-      # 11. 保存结果
+      # 11. 保存所有量化结果
       # =====================================================
 
       - name: Commit results
@@ -106,7 +107,8 @@ jobs:
           git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
           git add data
+          git add trades.csv
 
-          git diff --cached --quiet || git commit -m "Update ETF V8 final results"
+          git diff --cached --quiet || git commit -m "Update ETF V8 quant results and trading signals"
 
           git push
