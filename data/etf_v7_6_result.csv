@@ -1,0 +1,2 @@
+﻿code,name,windows,win_rate,average_return,average_annual,average_drawdown,average_sharpe,return_improvement,sharpe_improvement,drawdown_improvement,most_common_parameter,parameter_stability
+159581,红利ETF,2,100.0,1.16,2.31,-1.61,0.7,0.0,0.0,0.0,MA-10% + DD-10%,50.0
