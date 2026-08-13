@@ -28,6 +28,8 @@ ETF_NAMES = {
     "159581": "红利ETF"
 }
 
+CORE_CODE = "159581"
+
 # ============================================================
 # 文件读取
 # ============================================================
@@ -43,7 +45,7 @@ def load_csv(path):
 
 
 # ============================================================
-# 读取ETF最新数据
+# ETF行情
 # ============================================================
 
 def load_etf(code):
@@ -55,17 +57,29 @@ def load_etf(code):
     if df is None or df.empty:
         return None
 
-    df["date"] = pd.to_datetime(df["date"], errors="coerce")
-    df["price"] = pd.to_numeric(df["price"], errors="coerce")
+    df["date"] = pd.to_datetime(
+        df["date"],
+        errors="coerce"
+    )
 
-    df = df.dropna(subset=["date", "price"])
-    df = df.sort_values("date").reset_index(drop=True)
+    df["price"] = pd.to_numeric(
+        df["price"],
+        errors="coerce"
+    )
+
+    df = df.dropna(
+        subset=["date", "price"]
+    )
+
+    df = df.sort_values(
+        "date"
+    ).reset_index(drop=True)
 
     return df
 
 
 # ============================================================
-# 读取V8结果
+# V8结果
 # ============================================================
 
 def load_v8():
@@ -77,59 +91,129 @@ def load_v8():
     if df is None or df.empty:
         return None
 
+    if "code" in df.columns:
+        df["code"] = (
+            df["code"]
+            .astype(str)
+            .str.replace(".0", "", regex=False)
+            .str.zfill(6)
+        )
+
     return df
 
 
 # ============================================================
 # 读取交易记录
+#
+# 优先读取根目录 trades.csv
+# 同时兼容旧的 data/trades.csv
 # ============================================================
 
 def load_trades():
 
-    path = "data/trades.csv"
+    possible_paths = [
+        "trades.csv",
+        "data/trades.csv"
+    ]
 
-    if not os.path.exists(path):
-        return pd.DataFrame(
-            columns=[
-                "date",
-                "code",
-                "action",
-                "price",
-                "amount"
-            ]
-        )
+    for path in possible_paths:
 
-    df = pd.read_csv(path)
+        if os.path.exists(path):
+
+            try:
+
+                df = pd.read_csv(path)
+
+                if not df.empty:
+                    return df
+
+            except Exception:
+                pass
+
+    return pd.DataFrame(
+        columns=[
+            "date",
+            "code",
+            "action",
+            "price",
+            "amount"
+        ]
+    )
+
+
+# ============================================================
+# 读取历史实际成交价格
+# ============================================================
+
+def get_actual_first_price(
+    code,
+    trades
+):
+
+    if trades.empty:
+        return None
+
+    if "code" not in trades.columns:
+        return None
+
+    df = trades[
+        trades["code"].astype(str) == str(code)
+    ].copy()
 
     if df.empty:
-        return pd.DataFrame(
-            columns=[
-                "date",
-                "code",
-                "action",
-                "price",
-                "amount"
-            ]
+        return None
+
+    if "action" not in df.columns:
+        return None
+
+    buys = df[
+        df["action"]
+        .astype(str)
+        .str.upper() == "BUY"
+    ].copy()
+
+    if buys.empty:
+        return None
+
+    if "date" in buys.columns:
+
+        buys["date"] = pd.to_datetime(
+            buys["date"],
+            errors="coerce"
         )
 
-    return df
+        buys = buys.sort_values(
+            "date"
+        )
+
+    try:
+        return float(
+            buys.iloc[0]["price"]
+        )
+    except Exception:
+        return None
 
 
 # ============================================================
-# 计算建仓档位
+# 根据首次实际成交价格计算固定3%档位
 # ============================================================
 
-def calculate_levels(price):
+def calculate_fixed_levels(
+    base_price
+):
 
     levels = []
 
     for i in range(TRANCHE_COUNT):
 
-        level_price = price * ((1 - ADD_STEP) ** i)
+        price = (
+            base_price *
+            ((1 - ADD_STEP) ** i)
+        )
 
         levels.append({
             "档位": i + 1,
-            "价格": level_price,
+            "触发价格": price,
             "金额": TRANCHE_AMOUNT
         })
 
@@ -140,69 +224,176 @@ def calculate_levels(price):
 # 计算实际持仓
 # ============================================================
 
-def calculate_position(code, trades):
+def calculate_position(
+    code,
+    trades
+):
+
+    result = {
+        "shares": 0.0,
+        "cost": 0.0,
+        "buy_amount": 0.0,
+        "sell_amount": 0.0
+    }
 
     if trades.empty:
-        return {
-            "shares": 0,
-            "cost": 0,
-            "buy_amount": 0,
-            "sell_amount": 0
-        }
+        return result
 
-    df = trades[trades["code"].astype(str) == str(code)].copy()
+    if "code" not in trades.columns:
+        return result
+
+    df = trades[
+        trades["code"].astype(str) == str(code)
+    ].copy()
 
     if df.empty:
-        return {
-            "shares": 0,
-            "cost": 0,
-            "buy_amount": 0,
-            "sell_amount": 0
-        }
-
-    shares = 0
-    cost = 0
-    buy_amount = 0
-    sell_amount = 0
+        return result
 
     for _, row in df.iterrows():
 
-        action = str(row["action"]).upper()
+        try:
 
-        price = float(row["price"])
-        amount = float(row["amount"])
+            action = str(
+                row.get("action", "")
+            ).upper()
 
-        if action == "BUY":
+            price = float(
+                row.get("price", 0)
+            )
 
-            buy_shares = amount / price
+            amount = float(
+                row.get("amount", 0)
+            )
 
-            shares += buy_shares
-            cost += amount
-            buy_amount += amount
+            if price <= 0 or amount <= 0:
+                continue
 
-        elif action == "SELL":
+            shares = amount / price
 
-            sell_shares = amount / price
+            if action == "BUY":
 
-            shares -= sell_shares
-            sell_amount += amount
+                result["shares"] += shares
+                result["cost"] += amount
+                result["buy_amount"] += amount
 
-            if shares < 0:
-                shares = 0
+            elif action == "SELL":
 
-    return {
-        "shares": shares,
-        "cost": cost,
-        "buy_amount": buy_amount,
-        "sell_amount": sell_amount
-    }
+                result["shares"] -= shares
+                result["sell_amount"] += amount
+
+        except Exception:
+            continue
+
+    result["shares"] = max(
+        result["shares"],
+        0
+    )
+
+    return result
+
+
+# ============================================================
+# 计算建仓档位
+# ============================================================
+
+def get_current_level(
+    cost
+):
+
+    if cost <= 0:
+        return 0
+
+    level = int(
+        round(
+            cost / TRANCHE_AMOUNT
+        )
+    )
+
+    return min(
+        max(level, 0),
+        TRANCHE_COUNT
+    )
+
+
+# ============================================================
+# 获取V8评级
+# ============================================================
+
+def get_rating(
+    code,
+    v8
+):
+
+    if v8 is None:
+        return "未知"
+
+    if "code" not in v8.columns:
+        return "未知"
+
+    row = v8[
+        v8["code"].astype(str) == str(code)
+    ]
+
+    if row.empty:
+        return "未知"
+
+    return str(
+        row.iloc[0].get(
+            "rating",
+            "未知"
+        )
+    )
+
+
+# ============================================================
+# 趋势判断
+# ============================================================
+
+def get_trend(df):
+
+    if len(df) < 60:
+        return "数据不足", None, None
+
+    ma20 = (
+        df["price"]
+        .rolling(20)
+        .mean()
+        .iloc[-1]
+    )
+
+    ma60 = (
+        df["price"]
+        .rolling(60)
+        .mean()
+        .iloc[-1]
+    )
+
+    price = float(
+        df.iloc[-1]["price"]
+    )
+
+    if price > ma20 and price > ma60:
+
+        trend = "🟢 强势"
+
+    elif price > ma60:
+
+        trend = "🟡 中性"
+
+    else:
+
+        trend = "🔴 弱势"
+
+    return trend, ma20, ma60
 
 
 # ============================================================
 # 页面标题
 # ============================================================
 
-st.title("📈 ETF V8 实盘助手")
+st.title(
+    "📈 ETF V8 实盘助手"
+)
 
 st.caption(
     "V8模型冻结｜严格样本外验证优先｜工作日自动更新"
@@ -212,11 +403,14 @@ st.divider()
 
 
 # ============================================================
-# 更新时间
+# 当前时间
 # ============================================================
 
 st.info(
-    f"页面打开时间：{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+    "App打开时间："
+    + datetime.now().strftime(
+        "%Y-%m-%d %H:%M:%S"
+    )
 )
 
 
@@ -232,12 +426,14 @@ trades = load_trades()
 # V8最终排名
 # ============================================================
 
-st.header("🏆 V8 最终模型排名")
+st.header(
+    "🏆 V8最终模型排名"
+)
 
 if v8 is None:
 
     st.error(
-        "暂时找不到 data/etf_v8_final_result.csv"
+        "找不到 data/etf_v8_final_result.csv"
     )
 
 else:
@@ -258,11 +454,14 @@ else:
     ]
 
     available_cols = [
-        c for c in show_cols
+        c
+        for c in show_cols
         if c in v8.columns
     ]
 
-    ranking = v8[available_cols].copy()
+    ranking = v8[
+        available_cols
+    ].copy()
 
     st.dataframe(
         ranking,
@@ -272,110 +471,250 @@ else:
 
 
 # ============================================================
-# 当前核心ETF
+# 今日操作结论
 # ============================================================
 
-st.header("🎯 当前核心ETF")
+st.header(
+    "🚦 今日实盘操作"
+)
 
-core_code = "159581"
-
-core_df = load_etf(core_code)
+core_df = load_etf(
+    CORE_CODE
+)
 
 if core_df is None:
 
-    st.error("无法读取159581数据")
+    st.error(
+        "无法读取159581行情数据"
+    )
 
 else:
 
     latest = core_df.iloc[-1]
 
-    latest_price = float(latest["price"])
+    latest_price = float(
+        latest["price"]
+    )
+
     latest_date = latest["date"]
 
+    trend, ma20, ma60 = get_trend(
+        core_df
+    )
+
     position = calculate_position(
-        core_code,
+        CORE_CODE,
         trades
     )
 
     shares = position["shares"]
     cost = position["cost"]
 
-    market_value = shares * latest_price
+    market_value = (
+        shares *
+        latest_price
+    )
 
-    profit = market_value - cost
+    profit = (
+        market_value -
+        cost
+    )
 
     if cost > 0:
-        profit_pct = profit / cost * 100
+
+        profit_pct = (
+            profit /
+            cost *
+            100
+        )
+
     else:
+
         profit_pct = 0
 
-    # --------------------------------------------------------
-    # 均线
-    # --------------------------------------------------------
-
-    ma20 = core_df["price"].rolling(20).mean().iloc[-1]
-    ma60 = core_df["price"].rolling(60).mean().iloc[-1]
-
-    if latest_price > ma20 and latest_price > ma60:
-        trend = "🟢 强势"
-
-    elif latest_price > ma60:
-        trend = "🟡 中性"
-
-    else:
-        trend = "🔴 弱势"
-
-    # --------------------------------------------------------
-    # 建仓档位
-    # --------------------------------------------------------
-
-    if cost <= 0:
-        current_level = 0
-    else:
-        current_level = min(
-            int(round(cost / TRANCHE_AMOUNT)),
-            TRANCHE_COUNT
-        )
-
-    # --------------------------------------------------------
-    # 下一档价格
-    # --------------------------------------------------------
-
-    next_level = current_level + 1
-
-    if next_level <= TRANCHE_COUNT:
-
-        next_price = latest_price * (
-            (1 - ADD_STEP) ** current_level
-        )
-
-    else:
-
-        next_price = None
 
     # --------------------------------------------------------
     # V8评级
     # --------------------------------------------------------
 
-    rating = "未知"
+    rating = get_rating(
+        CORE_CODE,
+        v8
+    )
 
-    if v8 is not None:
-
-        row = v8[
-            v8["code"].astype(str) == core_code
-        ]
-
-        if not row.empty:
-
-            rating = str(
-                row.iloc[0].get(
-                    "rating",
-                    "未知"
-                )
-            )
 
     # --------------------------------------------------------
-    # 页面
+    # 当前档位
+    # --------------------------------------------------------
+
+    current_level = get_current_level(
+        cost
+    )
+
+
+    # --------------------------------------------------------
+    # 首次实际成交价格
+    # --------------------------------------------------------
+
+    first_buy_price = get_actual_first_price(
+        CORE_CODE,
+        trades
+    )
+
+
+    # --------------------------------------------------------
+    # 价格计划基准
+    #
+    # 如果已经真实成交：
+    # 使用首次实际成交价
+    #
+    # 如果还没有成交：
+    # 使用当前价格作为参考
+    # --------------------------------------------------------
+
+    if first_buy_price is not None:
+
+        base_price = first_buy_price
+        base_text = (
+            "首次实际成交价"
+        )
+
+    else:
+
+        base_price = latest_price
+        base_text = (
+            "当前价格参考"
+        )
+
+
+    levels = calculate_fixed_levels(
+        base_price
+    )
+
+
+    # --------------------------------------------------------
+    # 下一档
+    # --------------------------------------------------------
+
+    if current_level < TRANCHE_COUNT:
+
+        next_level_number = (
+            current_level + 1
+        )
+
+        next_price = float(
+            levels.iloc[
+                current_level
+            ]["触发价格"]
+        )
+
+    else:
+
+        next_level_number = None
+        next_price = None
+
+
+    # --------------------------------------------------------
+    # 今日操作逻辑
+    # --------------------------------------------------------
+
+    if "A" in rating:
+
+        if current_level == 0:
+
+            action_text = (
+                "🟢 首次建仓"
+            )
+
+            action_detail = (
+                f"建议买入 ¥{TRANCHE_AMOUNT:,.0f}"
+            )
+
+        elif current_level < TRANCHE_COUNT:
+
+            if next_price is not None:
+
+                if latest_price <= next_price:
+
+                    action_text = (
+                        "🟢 触发加仓"
+                    )
+
+                    action_detail = (
+                        f"第{next_level_number}档"
+                        f"买入 ¥{TRANCHE_AMOUNT:,.0f}"
+                    )
+
+                else:
+
+                    action_text = (
+                        "🟡 暂不加仓"
+                    )
+
+                    action_detail = (
+                        f"等待价格 ≤ "
+                        f"{next_price:.4f}"
+                    )
+
+            else:
+
+                action_text = (
+                    "🟡 暂不加仓"
+                )
+
+                action_detail = (
+                    "等待下一档价格"
+                )
+
+        else:
+
+            action_text = (
+                "🟡 已完成建仓"
+            )
+
+            action_detail = (
+                "当前不再增加仓位"
+            )
+
+    else:
+
+        action_text = (
+            "🔴 暂缓买入"
+        )
+
+        action_detail = (
+            "V8评级不是A，不执行新建仓"
+        )
+
+
+    # --------------------------------------------------------
+    # 大号操作结论
+    # --------------------------------------------------------
+
+    if "🟢" in action_text:
+
+        st.success(
+            f"### {action_text}\n\n"
+            f"**{action_detail}**"
+        )
+
+    elif "🔴" in action_text:
+
+        st.error(
+            f"### {action_text}\n\n"
+            f"**{action_detail}**"
+        )
+
+    else:
+
+        st.warning(
+            f"### {action_text}\n\n"
+            f"**{action_detail}**"
+        )
+
+
+    # --------------------------------------------------------
+    # 核心数据
     # --------------------------------------------------------
 
     c1, c2, c3, c4 = st.columns(4)
@@ -388,17 +727,26 @@ else:
     c2.metric(
         "20日均线",
         f"{ma20:.4f}"
+        if ma20 is not None
+        else "-"
     )
 
     c3.metric(
         "60日均线",
         f"{ma60:.4f}"
+        if ma60 is not None
+        else "-"
     )
 
     c4.metric(
         "趋势",
         trend
     )
+
+
+    # --------------------------------------------------------
+    # 持仓
+    # --------------------------------------------------------
 
     st.write("")
 
@@ -415,66 +763,112 @@ else:
     )
 
     c3.metric(
-        "实盘收益",
+        "浮动盈亏",
         f"¥{profit:,.0f}"
     )
 
     c4.metric(
-        "实盘收益率",
+        "收益率",
         f"{profit_pct:.2f}%"
     )
 
-    st.write("")
 
-    st.subheader("📌 当前模型状态")
+    # --------------------------------------------------------
+    # 模型状态
+    # --------------------------------------------------------
+
+    st.subheader(
+        "📌 模型状态"
+    )
 
     st.write(
         f"**V8评级：{rating}**"
     )
 
     st.write(
-        f"当前建仓：**{current_level} / {TRANCHE_COUNT}档**"
+        f"当前建仓："
+        f"**{current_level} / "
+        f"{TRANCHE_COUNT}档**"
     )
 
-    if current_level < TRANCHE_COUNT:
+    st.write(
+        f"数据日期："
+        f"**{latest_date.strftime('%Y-%m-%d')}**"
+    )
 
-        if current_level == 0:
 
-            st.success(
-                "🟢 可以进行首次建仓"
-            )
+    # --------------------------------------------------------
+    # 下一档
+    # --------------------------------------------------------
 
-        else:
+    if next_price is not None:
 
-            st.info(
-                f"下一档参考价格："
-                f"**{next_price:.4f}**"
-            )
+        st.info(
+            f"📍 第{next_level_number}档触发价格："
+            f"**{next_price:.4f}**\n\n"
+            f"达到该价格后："
+            f"**买入 ¥{TRANCHE_AMOUNT:,.0f}**"
+        )
 
     else:
 
-        st.warning(
-            "已完成5档建仓"
+        st.success(
+            "已经完成5档建仓。"
         )
 
 
 # ============================================================
-# 完整价格计划
+# 完整固定价格计划
 # ============================================================
 
-st.header("📊 3%分批建仓价格计划")
+st.header(
+    "📊 3%分批建仓价格计划"
+)
 
 if core_df is not None:
 
-    levels = calculate_levels(
-        float(core_df.iloc[-1]["price"])
+    latest_price = float(
+        core_df.iloc[-1]["price"]
     )
 
-    levels["价格"] = levels["价格"].map(
+    first_buy_price = get_actual_first_price(
+        CORE_CODE,
+        trades
+    )
+
+    if first_buy_price is not None:
+
+        base_price = first_buy_price
+
+        st.success(
+            f"价格计划已经锁定。"
+            f"基准：首次实际成交价 "
+            f"**{first_buy_price:.4f}**"
+        )
+
+    else:
+
+        base_price = latest_price
+
+        st.info(
+            f"目前尚未记录实际成交。"
+            f"当前价格 **{latest_price:.4f}** "
+            f"仅作为首次建仓参考。"
+        )
+
+    levels = calculate_fixed_levels(
+        base_price
+    )
+
+    levels["触发价格"] = levels[
+        "触发价格"
+    ].map(
         lambda x: f"{x:.4f}"
     )
 
-    levels["金额"] = levels["金额"].map(
+    levels["金额"] = levels[
+        "金额"
+    ].map(
         lambda x: f"¥{x:,.0f}"
     )
 
@@ -485,7 +879,7 @@ if core_df is not None:
     )
 
     st.caption(
-        "实际首次成交后，建议以后续实际成交价重新计算价格计划。"
+        "规则：首次实际成交后，后续4档价格按照首次实际成交价固定计算，不随每日价格变化。"
     )
 
 
@@ -493,7 +887,9 @@ if core_df is not None:
 # 三只ETF当前状态
 # ============================================================
 
-st.header("👀 三只ETF实时观察")
+st.header(
+    "👀 三只ETF当前状态"
+)
 
 rows = []
 
@@ -506,44 +902,30 @@ for code, name in ETF_NAMES.items():
 
     latest = df.iloc[-1]
 
-    price = float(latest["price"])
+    price = float(
+        latest["price"]
+    )
 
-    ma20 = df["price"].rolling(20).mean().iloc[-1]
-    ma60 = df["price"].rolling(60).mean().iloc[-1]
+    trend, ma20, ma60 = get_trend(
+        df
+    )
 
-    if price > ma20 and price > ma60:
-        trend = "🟢 强势"
-    elif price > ma60:
-        trend = "🟡 中性"
-    else:
-        trend = "🔴 弱势"
-
-    rating = "—"
-
-    if v8 is not None:
-
-        row = v8[
-            v8["code"].astype(str) == code
-        ]
-
-        if not row.empty:
-            rating = str(
-                row.iloc[0].get(
-                    "rating",
-                    "—"
-                )
-            )
+    rating = get_rating(
+        code,
+        v8
+    )
 
     rows.append({
         "代码": code,
         "ETF": name,
-        "最新价格": price,
+        "最新价格": f"{price:.4f}",
         "趋势": trend,
         "V8评级": rating,
-        "最新日期": latest["date"].strftime(
-            "%Y-%m-%d"
-        )
+        "最新日期": latest[
+            "date"
+        ].strftime("%Y-%m-%d")
     })
+
 
 if rows:
 
@@ -558,12 +940,15 @@ if rows:
 # 实盘交易记录
 # ============================================================
 
-st.header("🧾 实盘交易记录")
+st.header(
+    "🧾 实盘交易记录"
+)
 
 if trades.empty:
 
     st.info(
-        "目前还没有真实成交记录。"
+        "目前没有读取到交易记录。"
+        "如果你已经成交，请把实际成交记录写入 trades.csv。"
     )
 
 else:
@@ -576,16 +961,73 @@ else:
 
 
 # ============================================================
-# 说明
+# 资金状态
+# ============================================================
+
+st.header(
+    "💰 资金状态"
+)
+
+core_position = calculate_position(
+    CORE_CODE,
+    trades
+)
+
+used_capital = core_position[
+    "cost"
+]
+
+remaining_capital = (
+    INITIAL_CAPITAL -
+    used_capital
+)
+
+if remaining_capital < 0:
+    remaining_capital = 0
+
+c1, c2, c3 = st.columns(3)
+
+c1.metric(
+    "总资金",
+    f"¥{INITIAL_CAPITAL:,.0f}"
+)
+
+c2.metric(
+    "已投入",
+    f"¥{used_capital:,.0f}"
+)
+
+c3.metric(
+    "剩余资金",
+    f"¥{remaining_capital:,.0f}"
+)
+
+
+# ============================================================
+# 使用说明
 # ============================================================
 
 st.divider()
 
-st.caption(
-    "说明：V8模型只负责模型评价与操作参考，"
-    "实际交易由投资者自行决定。"
+st.subheader(
+    "📖 每天怎么看"
+)
+
+st.markdown(
+    """
+**每天只需要重点看「🚦 今日实盘操作」。**
+
+- 🟢 **首次建仓** → 可以考虑买入20,000元
+- 🟢 **触发加仓** → 达到对应价格，可以考虑加仓20,000元
+- 🟡 **暂不加仓** → 继续等待
+- 🔴 **暂缓买入** → 不执行新的建仓
+
+价格计划以**首次实际成交价格**为基准锁定。
+
+V8负责模型评价和交易参考，实际交易仍由投资者自行确认。
+"""
 )
 
 st.caption(
-    "当前模型核心ETF：159581 红利ETF。"
+    "ETF V8 实盘助手｜模型冻结版"
 )
