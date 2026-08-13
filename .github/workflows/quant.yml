@@ -97,7 +97,7 @@ jobs:
         run: |
           python backtest_etf_v8.py
 
-      # =====================================================
+            # =====================================================
       # 11. 保存所有量化结果
       # =====================================================
 
@@ -106,9 +106,18 @@ jobs:
           git config --global user.name "github-actions[bot]"
           git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
+          # 保存 data 文件夹
           git add data
-          git add trades.csv
 
-          git diff --cached --quiet || git commit -m "Update ETF V8 quant results and trading signals"
+          # 如果 trades.csv 存在，就一起保存
+          if [ -f trades.csv ]; then
+            git add trades.csv
+          fi
 
-          git push
+          # 如果有变化就提交
+          if git diff --cached --quiet; then
+            echo "没有新的结果需要提交"
+          else
+            git commit -m "Update ETF V8 quant results and trading signals"
+            git push
+          fi
