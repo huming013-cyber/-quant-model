@@ -1,0 +1,4 @@
+﻿code,name,buy_hold_return,buy_hold_annual,buy_hold_drawdown,buy_hold_sharpe,strategy_return,strategy_annual,strategy_drawdown,strategy_sharpe,validation_windows,validation_win_rate,validation_return,validation_annual,validation_drawdown,validation_sharpe,parameter_stability,v8_score,rating,final_rank
+159581,红利ETF,6.0,2.42,-15.57,0.24,6.17,2.49,-9.33,0.33,3,100.0,1.79,3.62,-2.5,0.8,66.67,23.9134,A：优先,1
+159209,红利质量ETF,16.5,11.36,-20.86,0.74,8.54,5.95,-10.01,0.87,1,0.0,-3.56,-8.56,-12.75,-0.55,100.0,-18.62,D：暂缓,2
+159399,现金流ETF,1.5,1.01,-26.26,0.15,2.32,1.56,-12.1,0.28,1,0.0,-10.68,-23.35,-18.31,-1.89,100.0,-46.26,D：暂缓,3
